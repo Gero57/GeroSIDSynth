@@ -90,6 +90,8 @@ juce_generate_juce_header(GeroSIDSynth)
 target_sources(GeroSIDSynth PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
+    Source/PluginEditor.cpp
+    Source/PluginEditor.h
 )
 
 target_compile_definitions(GeroSIDSynth PUBLIC
