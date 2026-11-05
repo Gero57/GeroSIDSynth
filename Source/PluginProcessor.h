@@ -68,7 +68,7 @@ private:
     void startNote (int midiNote, float velocity);
     void stopNote (int midiNote);
     void setVoiceFrequency (int voice, double frequencyWord);
-    double getTunedFrequencyWord (int midiNote) const;
+    double getTunedFrequencyWord (int midiNote);
     void applyPitchBend (int wheelValue);
     void silenceAllVoices();
 
