@@ -8,6 +8,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
 
+FetchContent_Declare(
+    JUCE
+    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+    GIT_TAG 8.0.6
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(JUCE)
+
 # Cycle-accurate MOS 6581/8580 emulator. Pin an immutable upstream revision.
 FetchContent_Declare(
     RESIDFP
