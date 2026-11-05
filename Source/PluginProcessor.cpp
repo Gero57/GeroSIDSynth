@@ -49,7 +49,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout GeroSIDSynthAudioProcessor::
     layout.add (std::make_unique<APF> ("glide", "Glide",
         juce::NormalisableRange<float> (0.0f, 2000.0f, 1.0f, 0.5f), 0.0f, " ms"));
     layout.add (std::make_unique<APF> ("vibratoDepth", "Vibrato Depth",
-        juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f, " cents"));
+        juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 50.0f, " cents"));
     layout.add (std::make_unique<APF> ("vibratoRate", "Vibrato Rate",
         juce::NormalisableRange<float> (0.1f, 12.0f, 0.01f), 5.0f, " Hz"));
     return layout;
@@ -174,6 +174,9 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
         static_cast<double> (parameterValue (parameters, "vibratoDepth")));
     const double vibratoRate = juce::jlimit (0.1, 12.0,
         static_cast<double> (parameterValue (parameters, "vibratoRate")));
+    // MIDI CC1 (Modulation Wheel) scales the panel Depth control from zero
+    // to its configured maximum. Keeping the LFO path alive with Depth set
+    // ensures that returning the wheel to zero restores the exact base pitch.
     const bool hasActiveVibrato = vibratoDepth > 0.001 && hasActiveNotes;
 
     if (hasActiveGlide || hasActiveVibrato)
@@ -185,7 +188,7 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
         for (int sample = 0; sample < numSamples; ++sample)
         {
             const double vibratoCents = hasActiveVibrato
-                ? std::sin (vibratoPhase) * vibratoDepth : 0.0;
+                ? std::sin (vibratoPhase) * vibratoDepth * modWheelAmount : 0.0;
             const double vibratoRatio = std::pow (2.0, vibratoCents / 1200.0);
             for (int voice = 0; voice < sidVoiceCount; ++voice)
             {
@@ -501,6 +504,8 @@ void GeroSIDSynthAudioProcessor::handleMidiMessage (const juce::MidiMessage& mes
     else if (message.isNoteOff()) stopNote (message.getNoteNumber());
     else if (message.isPitchWheel())
         applyPitchBend (message.getPitchWheelValue());
+    else if (message.isController() && message.getControllerNumber() == 1)
+        modWheelAmount = static_cast<double> (message.getControllerValue()) / 127.0;
     else if (message.isAllNotesOff()
              || (message.isController() && message.getControllerNumber() == 123))
     {
