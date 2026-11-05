@@ -61,6 +61,7 @@ private:
     std::array<int, sidVoiceCount> glideSamplesTotal { 0, 0, 0 };
     double currentSampleRate = 44100.0;
     double pitchBendSemitones = 0.0;
+    double vibratoPhase = 0.0;
     int nextVoice = 0;
     int lastChipModel = -1;
 
