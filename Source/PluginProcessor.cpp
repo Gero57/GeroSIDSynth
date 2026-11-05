@@ -13,6 +13,14 @@ namespace
             return value->load();
         return 0.0f;
     }
+
+    // Approximate complete SID envelope-release times for R=0..15.
+    // The long settings are important: voices must not be stolen while their
+    // audible release tail is still running.
+    constexpr std::array<double, 16> sidReleaseSeconds {
+        0.006, 0.024, 0.048, 0.072, 0.114, 0.168, 0.204, 0.240,
+        0.300, 0.750, 1.500, 2.400, 3.000, 9.000, 15.000, 24.000
+    };
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout GeroSIDSynthAudioProcessor::createParameterLayout()
@@ -60,19 +68,32 @@ GeroSIDSynthAudioProcessor::GeroSIDSynthAudioProcessor()
         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       parameters (*this, nullptr, "GERO_SID_STATE", createParameterLayout())
 {
+    voiceNotes.fill (-1);
+    voiceControls.fill (0x00);
+}
+
+void GeroSIDSynthAudioProcessor::configureSid (reSIDfp::residfp& engine)
+{
+    engine.setChipModel (parameterValue (parameters, "model") < 0.5f
+                         ? reSIDfp::MOS6581 : reSIDfp::CSG8580);
+    engine.setCombinedWaveforms (reSIDfp::AVERAGE);
+    engine.noiseLevel (0);
+    engine.setSamplingParameters (sidClockHz, reSIDfp::RESAMPLE, currentSampleRate);
+    engine.reset();
 }
 
 void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     currentSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
-    sid = std::make_unique<reSIDfp::residfp>();
-    sid->setChipModel (reSIDfp::MOS6581);
-    sid->setCombinedWaveforms (reSIDfp::AVERAGE);
-    sid->noiseLevel (0);
-    sid->setSamplingParameters (sidClockHz, reSIDfp::RESAMPLE, currentSampleRate);
-    sid->reset();
 
-    sidSamples.resize (static_cast<size_t> (std::max (samplesPerBlock, 1)));
+    for (int voice = 0; voice < maxPolyphony; ++voice)
+    {
+        sidEngines[static_cast<size_t> (voice)] = std::make_unique<reSIDfp::residfp>();
+        configureSid (*sidEngines[static_cast<size_t> (voice)]);
+        sidSamples[static_cast<size_t> (voice)].resize (
+            static_cast<size_t> (std::max (samplesPerBlock, 1)));
+    }
+
     voiceNotes.fill (-1);
     monoHeldCounts.fill (0);
     monoHeldOrder.fill (0);
@@ -80,7 +101,7 @@ void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     releaseSamplesRemaining.fill (0);
     voiceStartOrder.fill (0);
     nextNoteOrder = 1;
-    voiceControls.fill (0x20);
+    voiceControls.fill (0x00);
     currentFrequencyWords.fill (0.0);
     glideStartWords.fill (0.0);
     glideTargetWords.fill (0.0);
@@ -88,6 +109,7 @@ void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     glideSamplesTotal.fill (0);
     pitchBendSemitones = 0.0;
     vibratoPhase = 0.0;
+    modWheelAmount = 0.0;
     nextVoice = 0;
     lastChipModel = -1;
     applyGlobalParameters();
@@ -96,93 +118,108 @@ void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
 void GeroSIDSynthAudioProcessor::releaseResources()
 {
     silenceAllVoices();
-    sid.reset();
+    for (auto& engine : sidEngines)
+        engine.reset();
 }
 
 void GeroSIDSynthAudioProcessor::applyGlobalParameters()
 {
-    if (sid == nullptr)
-        return;
-
     const int model = static_cast<int> (parameterValue (parameters, "model"));
     if (model != lastChipModel)
     {
-        sid->setChipModel (model == 0 ? reSIDfp::MOS6581 : reSIDfp::CSG8580);
+        for (auto& engine : sidEngines)
+            if (engine != nullptr)
+                engine->setChipModel (model == 0 ? reSIDfp::MOS6581 : reSIDfp::CSG8580);
         lastChipModel = model;
     }
 
     const int cutoff = juce::jlimit (0, 2047, static_cast<int> (parameterValue (parameters, "cutoff")));
     const int resonance = juce::jlimit (0, 15, static_cast<int> (parameterValue (parameters, "resonance")));
     const int filterMode = static_cast<int> (parameterValue (parameters, "filterMode"));
-
-    sid->write (0x15, static_cast<unsigned char> (cutoff & 0x07));
-    sid->write (0x16, static_cast<unsigned char> ((cutoff >> 3) & 0xff));
-    sid->write (0x17, static_cast<unsigned char> ((resonance << 4) | (filterMode == 0 ? 0x00 : 0x07)));
-
     unsigned char modeBits = 0;
     if (filterMode == 1) modeBits = 0x10;
     if (filterMode == 2) modeBits = 0x20;
     if (filterMode == 3) modeBits = 0x40;
-    sid->write (0x18, static_cast<unsigned char> (modeBits | 0x0f));
 
-    // Hard sync on a real SID is a ring relationship: oscillator 1 is synced
-    // by oscillator 3. Keep oscillator 3 running as a fixed master and use
-    // oscillator 1 as the played slave. SYNC is therefore a monophonic mode.
     const bool syncEnabled = parameterValue (parameters, "sync") >= 0.5f;
     const int waveform = juce::jlimit (0, 3, static_cast<int> (parameterValue (parameters, "waveform")));
     const unsigned char waveBits[] = { 0x10, 0x20, 0x40, 0x80 };
-    for (int voice = 0; voice < sidVoiceCount; ++voice)
+
+    for (int voice = 0; voice < maxPolyphony; ++voice)
     {
-        if (voiceNotes[static_cast<size_t> (voice)] < 0)
+        auto* engine = sidEngines[static_cast<size_t> (voice)].get();
+        if (engine == nullptr)
             continue;
-        unsigned char control = static_cast<unsigned char> (waveBits[waveform] | 0x01);
-        if (syncEnabled && voice == 0) control |= 0x02;
-        if (parameterValue (parameters, "ring") >= 0.5f) control |= 0x04;
-        voiceControls[static_cast<size_t> (voice)] = control;
-        sid->write (voice * sidRegisterStride + 4, control);
+
+        engine->write (0x15, static_cast<unsigned char> (cutoff & 0x07));
+        engine->write (0x16, static_cast<unsigned char> ((cutoff >> 3) & 0xff));
+        engine->write (0x17, static_cast<unsigned char> ((resonance << 4) | (filterMode == 0 ? 0x00 : 0x07)));
+        engine->write (0x18, static_cast<unsigned char> (modeBits | 0x0f));
+
+        if (voiceNotes[static_cast<size_t> (voice)] >= 0)
+        {
+            unsigned char control = static_cast<unsigned char> (waveBits[waveform] | 0x01);
+            if (syncEnabled && voice == 0) control |= 0x02;
+            if (parameterValue (parameters, "ring") >= 0.5f) control |= 0x04;
+            voiceControls[static_cast<size_t> (voice)] = control;
+            engine->write (4, control); // Every polyphonic note uses OSC1 on its own SID.
+        }
+        else if (releaseSamplesRemaining[static_cast<size_t> (voice)] == 0)
+        {
+            voiceControls[static_cast<size_t> (voice)] = 0x00;
+            engine->write (4, 0x00);
+        }
     }
-    if (syncEnabled)
+
+    // SYNC still uses the original SID relationship inside engine zero:
+    // OSC1 (played note) is hard-synced by OSC3 (fixed master).
+    if (syncEnabled && sidEngines[0] != nullptr)
     {
         const double masterWord = getTunedFrequencyWord (69);
-        setVoiceFrequency (2, masterWord);
-        voiceControls[2] = 0x20; // sawtooth, oscillator running, envelope gate low
-        sid->write (2 * sidRegisterStride + 4, voiceControls[2]);
+        const auto word = static_cast<unsigned int> (juce::jlimit (0.0, 65535.0, masterWord));
+        sidEngines[0]->write (14, static_cast<unsigned char> (word & 0xff));
+        sidEngines[0]->write (15, static_cast<unsigned char> ((word >> 8) & 0xff));
+        sidEngines[0]->write (18, 0x20);
     }
-    else if (voiceNotes[2] < 0)
+    else if (sidEngines[0] != nullptr)
     {
-        voiceControls[2] = 0x00;
-        sid->write (2 * sidRegisterStride + 4, 0x00);
+        sidEngines[0]->write (18, 0x00);
     }
 }
 
 void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
                                                int startSample, int numSamples)
 {
-    if (sid == nullptr || numSamples <= 0)
+    if (numSamples <= 0)
         return;
-    if (sidSamples.size() < static_cast<size_t> (numSamples))
-        sidSamples.resize (static_cast<size_t> (numSamples));
 
+    int soundingVoices = 0;
     bool hasActiveGlide = false;
     bool hasActiveNotes = false;
-    for (int voice = 0; voice < sidVoiceCount; ++voice)
+    for (int voice = 0; voice < maxPolyphony; ++voice)
     {
-        hasActiveGlide = hasActiveGlide || glideSamplesRemaining[static_cast<size_t> (voice)] > 0;
-        hasActiveNotes = hasActiveNotes || voiceNotes[static_cast<size_t> (voice)] >= 0;
+        const auto index = static_cast<size_t> (voice);
+        const bool sounding = voiceNotes[index] >= 0 || releaseSamplesRemaining[index] > 0;
+        if (sounding)
+            ++soundingVoices;
+        hasActiveGlide = hasActiveGlide || glideSamplesRemaining[index] > 0;
+        hasActiveNotes = hasActiveNotes || voiceNotes[index] >= 0;
+        if (sounding && sidSamples[index].size() < static_cast<size_t> (numSamples))
+            sidSamples[index].resize (static_cast<size_t> (numSamples));
     }
+
+    if (soundingVoices == 0)
+        return;
+
     const double vibratoDepth = juce::jlimit (0.0, 100.0,
         static_cast<double> (parameterValue (parameters, "vibratoDepth")));
     const double vibratoRate = juce::jlimit (0.1, 12.0,
         static_cast<double> (parameterValue (parameters, "vibratoRate")));
-    // MIDI CC1 (Modulation Wheel) scales the panel Depth control from zero
-    // to its configured maximum. Keeping the LFO path alive with Depth set
-    // ensures that returning the wheel to zero restores the exact base pitch.
     const bool hasActiveVibrato = vibratoDepth > 0.001 && hasActiveNotes;
+    const bool updatePerSample = hasActiveGlide || hasActiveVibrato;
 
-    if (hasActiveGlide || hasActiveVibrato)
+    if (updatePerSample)
     {
-        // Update SID pitch registers per sample only while glide or vibrato is
-        // active. The LFO modulates the tuned frequency, leaving PB independent.
         const double phaseIncrement = juce::MathConstants<double>::twoPi
                                     * vibratoRate / currentSampleRate;
         for (int sample = 0; sample < numSamples; ++sample)
@@ -190,67 +227,85 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
             const double vibratoCents = hasActiveVibrato
                 ? std::sin (vibratoPhase) * vibratoDepth * modWheelAmount : 0.0;
             const double vibratoRatio = std::pow (2.0, vibratoCents / 1200.0);
-            for (int voice = 0; voice < sidVoiceCount; ++voice)
+
+            for (int voice = 0; voice < maxPolyphony; ++voice)
             {
-                auto& remaining = glideSamplesRemaining[static_cast<size_t> (voice)];
+                const auto index = static_cast<size_t> (voice);
+                if (voiceNotes[index] < 0 && releaseSamplesRemaining[index] <= 0)
+                    continue;
+
+                auto& remaining = glideSamplesRemaining[index];
                 if (remaining > 0)
                 {
-                    const int total = std::max (1, glideSamplesTotal[static_cast<size_t> (voice)]);
+                    const int total = std::max (1, glideSamplesTotal[index]);
                     const double progress = 1.0 - static_cast<double> (remaining) / static_cast<double> (total);
-                    const double start = glideStartWords[static_cast<size_t> (voice)];
-                    const double target = glideTargetWords[static_cast<size_t> (voice)];
-                    const double frequency = start + (target - start) * progress;
-                    currentFrequencyWords[static_cast<size_t> (voice)] = frequency;
+                    const double frequency = glideStartWords[index]
+                        + (glideTargetWords[index] - glideStartWords[index]) * progress;
+                    currentFrequencyWords[index] = frequency;
                     --remaining;
                     if (remaining == 0)
-                        currentFrequencyWords[static_cast<size_t> (voice)] = target;
+                        currentFrequencyWords[index] = glideTargetWords[index];
                 }
-                if (voiceNotes[static_cast<size_t> (voice)] >= 0)
-                    setVoiceFrequency (voice, currentFrequencyWords[static_cast<size_t> (voice)] * vibratoRatio);
+
+                if (voiceNotes[index] >= 0)
+                    setVoiceFrequency (voice, currentFrequencyWords[index] * vibratoRatio);
+
+                sidEngines[index]->clock (&sidSamples[index][static_cast<size_t> (sample)], 1);
             }
+
             if (hasActiveVibrato)
             {
                 vibratoPhase += phaseIncrement;
                 if (vibratoPhase >= juce::MathConstants<double>::twoPi)
                     vibratoPhase -= juce::MathConstants<double>::twoPi;
             }
-            sid->clock (&sidSamples[static_cast<size_t> (sample)], 1);
         }
     }
     else
     {
-        sid->clock (sidSamples.data(), numSamples);
+        for (int voice = 0; voice < maxPolyphony; ++voice)
+        {
+            const auto index = static_cast<size_t> (voice);
+            if (voiceNotes[index] >= 0 || releaseSamplesRemaining[index] > 0)
+                sidEngines[index]->clock (sidSamples[index].data(), numSamples);
+        }
     }
 
-    // A SID voice can occasionally keep its oscillator audible after the
-    // envelope should have reached zero. Enforce a per-voice release deadline:
-    // allow the natural ADSR tail, then disable that oscillator deterministically.
-    for (int voice = 0; voice < sidVoiceCount; ++voice)
+    // Keep every release voice reserved for the complete ADSR tail. This is
+    // deliberately independent for each note, so long releases do not cause
+    // the allocator to recycle a still-audible oscillator prematurely.
+    for (int voice = 0; voice < maxPolyphony; ++voice)
     {
-        auto& remaining = releaseSamplesRemaining[static_cast<size_t> (voice)];
-        if (remaining > 0)
+        const auto index = static_cast<size_t> (voice);
+        if (releaseSamplesRemaining[index] > 0)
         {
-            remaining = std::max (0, remaining - numSamples);
-            if (remaining == 0 && voiceNotes[static_cast<size_t> (voice)] < 0)
+            releaseSamplesRemaining[index] = std::max (0, releaseSamplesRemaining[index] - numSamples);
+            if (releaseSamplesRemaining[index] == 0 && voiceNotes[index] < 0)
             {
-                voiceControls[static_cast<size_t> (voice)] = 0x00;
-                sid->write (voice * sidRegisterStride + 4, 0x00);
+                voiceControls[index] = 0x00;
+                sidEngines[index]->write (4, 0x00);
             }
         }
     }
 
-    // The SID triangle has a noticeably lower perceived output level than
-    // the other waveforms. Apply a modest make-up gain without hard clipping.
     const int selectedWaveform = juce::jlimit (0, 3,
         static_cast<int> (parameterValue (parameters, "waveform")));
     const float waveformGain = selectedWaveform == 0 ? 1.25f : 1.0f;
+    const float polyphonyGain = 1.0f / std::sqrt (static_cast<float> (std::max (1, soundingVoices)));
 
     for (int sample = 0; sample < numSamples; ++sample)
     {
-        const float value = (static_cast<float> (sidSamples[static_cast<size_t> (sample)]) / 32768.0f)
-                          * waveformGain;
+        float mixed = 0.0f;
+        for (int voice = 0; voice < maxPolyphony; ++voice)
+        {
+            const auto index = static_cast<size_t> (voice);
+            if (voiceNotes[index] >= 0 || releaseSamplesRemaining[index] > 0)
+                mixed += static_cast<float> (sidSamples[index][static_cast<size_t> (sample)]) / 32768.0f;
+        }
+
+        const float value = juce::jlimit (-1.0f, 1.0f, mixed * waveformGain * polyphonyGain);
         for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
-            buffer.setSample (channel, startSample + sample, value);
+            buffer.addSample (channel, startSample + sample, value);
     }
 }
 
@@ -271,66 +326,80 @@ double GeroSIDSynthAudioProcessor::getTunedFrequencyWord (int midiNote)
 
 void GeroSIDSynthAudioProcessor::setVoiceFrequency (int voice, double frequencyWord)
 {
-    if (sid == nullptr || voice < 0 || voice >= sidVoiceCount)
+    if (voice < 0 || voice >= maxPolyphony || sidEngines[static_cast<size_t> (voice)] == nullptr)
         return;
+
     const auto word = static_cast<unsigned int> (juce::jlimit (0.0, 65535.0, frequencyWord));
-    const int base = voice * sidRegisterStride;
-    sid->write (base + 0, static_cast<unsigned char> (word & 0xff));
-    sid->write (base + 1, static_cast<unsigned char> ((word >> 8) & 0xff));
+    auto& engine = *sidEngines[static_cast<size_t> (voice)];
+    engine.write (0, static_cast<unsigned char> (word & 0xff));
+    engine.write (1, static_cast<unsigned char> ((word >> 8) & 0xff));
 }
 
 void GeroSIDSynthAudioProcessor::applyPitchBend (int wheelValue)
 {
     const double normalized = (static_cast<double> (juce::jlimit (0, 16383, wheelValue)) - 8192.0) / 8192.0;
     pitchBendSemitones = normalized * 2.0;
-    for (int voice = 0; voice < sidVoiceCount; ++voice)
+    for (int voice = 0; voice < maxPolyphony; ++voice)
     {
-        const int note = voiceNotes[static_cast<size_t> (voice)];
-        if (note < 0)
+        const auto index = static_cast<size_t> (voice);
+        if (voiceNotes[index] < 0)
             continue;
-        const double target = getTunedFrequencyWord (note);
+        const double target = getTunedFrequencyWord (voiceNotes[index]);
         setVoiceFrequency (voice, target);
-        currentFrequencyWords[static_cast<size_t> (voice)] = target;
-        glideSamplesRemaining[static_cast<size_t> (voice)] = 0;
+        currentFrequencyWords[index] = target;
+        glideSamplesRemaining[index] = 0;
     }
 }
 
 void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
 {
     juce::ignoreUnused (velocity);
-    if (sid == nullptr || midiNote < 0 || midiNote > 127)
+    if (midiNote < 0 || midiNote > 127 || sidEngines[0] == nullptr)
         return;
 
     const bool syncEnabled = parameterValue (parameters, "sync") >= 0.5f;
     const bool monoMode = parameterValue (parameters, "voiceMode") >= 0.5f || syncEnabled;
     int voice = monoMode ? 0 : -1;
+
     if (! monoMode)
     {
-        for (int offset = 0; offset < sidVoiceCount; ++offset)
+        // Prefer a genuinely free engine, then the release tail nearest to
+        // silence. Only when all 16 notes are held do we steal the oldest.
+        for (int offset = 0; offset < maxPolyphony; ++offset)
         {
-            const int candidate = (nextVoice + offset) % sidVoiceCount;
-            if (voiceNotes[static_cast<size_t> (candidate)] < 0
-                && releaseSamplesRemaining[static_cast<size_t> (candidate)] == 0)
+            const int candidate = (nextVoice + offset) % maxPolyphony;
+            const auto index = static_cast<size_t> (candidate);
+            if (voiceNotes[index] < 0 && releaseSamplesRemaining[index] == 0)
             {
                 voice = candidate;
                 break;
             }
         }
+
         if (voice < 0)
         {
             int shortestRelease = std::numeric_limits<int>::max();
-            for (int candidate = 0; candidate < sidVoiceCount; ++candidate)
+            for (int candidate = 0; candidate < maxPolyphony; ++candidate)
             {
-                const int remaining = releaseSamplesRemaining[static_cast<size_t> (candidate)];
-                if (voiceNotes[static_cast<size_t> (candidate)] < 0 && remaining < shortestRelease)
+                const auto index = static_cast<size_t> (candidate);
+                if (voiceNotes[index] < 0 && releaseSamplesRemaining[index] < shortestRelease)
                 {
-                    shortestRelease = remaining;
+                    shortestRelease = releaseSamplesRemaining[index];
                     voice = candidate;
                 }
             }
         }
+
         if (voice < 0)
-            voice = nextVoice;
+        {
+            auto oldestOrder = std::numeric_limits<unsigned long long>::max();
+            for (int candidate = 0; candidate < maxPolyphony; ++candidate)
+                if (voiceStartOrder[static_cast<size_t> (candidate)] < oldestOrder)
+                {
+                    oldestOrder = voiceStartOrder[static_cast<size_t> (candidate)];
+                    voice = candidate;
+                }
+        }
     }
     else
     {
@@ -338,59 +407,72 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
         monoHeldOrder[static_cast<size_t> (midiNote)] = nextMonoOrder++;
     }
 
-    releaseSamplesRemaining[static_cast<size_t> (voice)] = 0;
-    const int base = voice * sidRegisterStride;
+    const auto index = static_cast<size_t> (voice);
+    auto& engine = *sidEngines[index];
+
+    // When a slot is stolen, reset only that note's private SID instance.
+    // This prevents a previous long envelope or gate state leaking into it.
+    if (voiceNotes[index] >= 0 || releaseSamplesRemaining[index] > 0)
+    {
+        configureSid (engine);
+        voiceControls[index] = 0x00;
+        applyGlobalParameters();
+    }
+
+    releaseSamplesRemaining[index] = 0;
     const double frequencyWord = getTunedFrequencyWord (midiNote);
     const int pulseWidth = juce::jlimit (0, 4095,
         static_cast<int> (std::round (parameterValue (parameters, "pulseWidth") * 40.95f)));
 
-    voiceControls[static_cast<size_t> (voice)] &= static_cast<unsigned char> (~0x01);
-    sid->write (base + 4, voiceControls[static_cast<size_t> (voice)]);
+    voiceControls[index] &= static_cast<unsigned char> (~0x01);
+    engine.write (4, voiceControls[index]);
+
     const double glideMs = juce::jlimit (0.0, 2000.0,
         static_cast<double> (parameterValue (parameters, "glide")));
     const int glideSamples = static_cast<int> (std::round (currentSampleRate * glideMs / 1000.0));
-    const double previousFrequency = currentFrequencyWords[static_cast<size_t> (voice)];
+    const double previousFrequency = currentFrequencyWords[index];
     if (glideSamples > 0 && previousFrequency > 0.0)
     {
-        glideStartWords[static_cast<size_t> (voice)] = previousFrequency;
-        glideTargetWords[static_cast<size_t> (voice)] = frequencyWord;
-        glideSamplesRemaining[static_cast<size_t> (voice)] = glideSamples;
-        glideSamplesTotal[static_cast<size_t> (voice)] = glideSamples;
+        glideStartWords[index] = previousFrequency;
+        glideTargetWords[index] = frequencyWord;
+        glideSamplesRemaining[index] = glideSamples;
+        glideSamplesTotal[index] = glideSamples;
         setVoiceFrequency (voice, previousFrequency);
     }
     else
     {
         setVoiceFrequency (voice, frequencyWord);
-        currentFrequencyWords[static_cast<size_t> (voice)] = frequencyWord;
-        glideSamplesRemaining[static_cast<size_t> (voice)] = 0;
-        glideSamplesTotal[static_cast<size_t> (voice)] = 0;
+        currentFrequencyWords[index] = frequencyWord;
+        glideSamplesRemaining[index] = 0;
+        glideSamplesTotal[index] = 0;
     }
-    sid->write (base + 2, static_cast<unsigned char> (pulseWidth & 0xff));
-    sid->write (base + 3, static_cast<unsigned char> ((pulseWidth >> 8) & 0x0f));
+
+    engine.write (2, static_cast<unsigned char> (pulseWidth & 0xff));
+    engine.write (3, static_cast<unsigned char> ((pulseWidth >> 8) & 0x0f));
 
     const int attack = juce::jlimit (0, 15, static_cast<int> (parameterValue (parameters, "attack")));
     const int decay = juce::jlimit (0, 15, static_cast<int> (parameterValue (parameters, "decay")));
     const int sustain = juce::jlimit (0, 15, static_cast<int> (parameterValue (parameters, "sustain")));
     const int release = juce::jlimit (0, 15, static_cast<int> (parameterValue (parameters, "release")));
-    sid->write (base + 5, static_cast<unsigned char> ((attack << 4) | decay));
-    sid->write (base + 6, static_cast<unsigned char> ((sustain << 4) | release));
+    engine.write (5, static_cast<unsigned char> ((attack << 4) | decay));
+    engine.write (6, static_cast<unsigned char> ((sustain << 4) | release));
 
     const int waveform = juce::jlimit (0, 3, static_cast<int> (parameterValue (parameters, "waveform")));
     const unsigned char waveBits[] = { 0x10, 0x20, 0x40, 0x80 };
     unsigned char control = static_cast<unsigned char> (waveBits[waveform] | 0x01);
-    if (parameterValue (parameters, "sync") >= 0.5f && voice == 0) control |= 0x02;
+    if (syncEnabled && voice == 0) control |= 0x02;
     if (parameterValue (parameters, "ring") >= 0.5f) control |= 0x04;
-    voiceControls[static_cast<size_t> (voice)] = control;
-    sid->write (base + 4, control);
+    voiceControls[index] = control;
+    engine.write (4, control);
 
-    voiceNotes[static_cast<size_t> (voice)] = midiNote;
-    voiceStartOrder[static_cast<size_t> (voice)] = nextNoteOrder++;
-    nextVoice = (voice + 1) % sidVoiceCount;
+    voiceNotes[index] = midiNote;
+    voiceStartOrder[index] = nextNoteOrder++;
+    nextVoice = (voice + 1) % maxPolyphony;
 }
 
 void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
 {
-    if (sid == nullptr || midiNote < 0 || midiNote > 127)
+    if (midiNote < 0 || midiNote > 127 || sidEngines[0] == nullptr)
         return;
 
     if (parameterValue (parameters, "voiceMode") >= 0.5f
@@ -439,10 +521,10 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
         }
     }
 
-    // Preserve FIFO matching for repeated overlapping pitches.
+    // FIFO matching for repeated overlapping pitches.
     int voice = -1;
     auto oldestOrder = std::numeric_limits<unsigned long long>::max();
-    for (int candidate = 0; candidate < sidVoiceCount; ++candidate)
+    for (int candidate = 0; candidate < maxPolyphony; ++candidate)
         if (voiceNotes[static_cast<size_t> (candidate)] == midiNote
             && voiceStartOrder[static_cast<size_t> (candidate)] < oldestOrder)
         {
@@ -453,55 +535,42 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
     if (voice < 0)
         return;
 
-    // Let the SID envelope enter its natural Release phase. Keep the selected
-    // waveform enabled and clear only Gate; hard-muting the control register
-    // also kills the envelope and produces an audible click (especially on 6581).
-    const int base = voice * sidRegisterStride;
-    voiceControls[static_cast<size_t> (voice)] &= static_cast<unsigned char> (~0x01);
-    sid->write (base + 4, voiceControls[static_cast<size_t> (voice)]);
-    voiceNotes[static_cast<size_t> (voice)] = -1;
-    glideSamplesRemaining[static_cast<size_t> (voice)] = 0;
+    const auto index = static_cast<size_t> (voice);
+    // Clear Gate only: the waveform remains enabled so the SID's own ADSR
+    // generator can produce its natural Release tail without a hard click.
+    voiceControls[index] &= static_cast<unsigned char> (~0x01);
+    sidEngines[index]->write (4, voiceControls[index]);
+    voiceNotes[index] = -1;
+    glideSamplesRemaining[index] = 0;
 
-    // SID release-rate periods in chip cycles for the 4-bit R nibble.
-    // Reserve the voice until its envelope has had time to finish releasing.
-    static constexpr std::array<int, 16> releaseRateCycles {
-        9, 32, 63, 95, 149, 220, 267, 313,
-        392, 977, 1954, 3126, 3907, 11720, 19532, 31251
-    };
     const int release = juce::jlimit (0, 15,
         static_cast<int> (parameterValue (parameters, "release")));
-    const double releaseSeconds = static_cast<double> (releaseRateCycles[static_cast<size_t> (release)])
-                                * 256.0 / sidClockHz;
-    // The 6581's analogue-style envelope behaviour can leave a tiny
-    // residual at the end of long releases. Give it a little extra time to
-    // reach silence before the safety mute; the 8580 keeps the shorter guard.
-    const double safetyTailSeconds =
-        parameterValue (parameters, "model") < 0.5f ? 0.250 : 0.010;
-    releaseSamplesRemaining[static_cast<size_t> (voice)] =
-        static_cast<int> (std::ceil (currentSampleRate * (releaseSeconds + safetyTailSeconds)));
+    const double safetyTailSeconds = parameterValue (parameters, "model") < 0.5f ? 0.250 : 0.050;
+    releaseSamplesRemaining[index] = static_cast<int> (std::ceil (
+        currentSampleRate * (sidReleaseSeconds[static_cast<size_t> (release)] + safetyTailSeconds)));
 }
 
 void GeroSIDSynthAudioProcessor::silenceAllVoices()
 {
-    if (sid == nullptr)
-        return;
-
-    for (int voice = 0; voice < sidVoiceCount; ++voice)
+    for (int voice = 0; voice < maxPolyphony; ++voice)
     {
-        const int base = voice * sidRegisterStride;
-        voiceControls[static_cast<size_t> (voice)] = 0x00;
-        sid->write (base + 4, 0x00);
-        voiceNotes[static_cast<size_t> (voice)] = -1;
-        glideSamplesRemaining[static_cast<size_t> (voice)] = 0;
-        releaseSamplesRemaining[static_cast<size_t> (voice)] =
-            static_cast<int> (std::ceil (currentSampleRate * voiceReuseGuardSeconds));
+        const auto index = static_cast<size_t> (voice);
+        if (sidEngines[index] != nullptr)
+            sidEngines[index]->write (4, 0x00);
+        voiceControls[index] = 0x00;
+        voiceNotes[index] = -1;
+        glideSamplesRemaining[index] = 0;
+        releaseSamplesRemaining[index] = 0;
     }
+    monoHeldCounts.fill (0);
 }
 
 void GeroSIDSynthAudioProcessor::handleMidiMessage (const juce::MidiMessage& message)
 {
-    if (message.isNoteOn()) startNote (message.getNoteNumber(), message.getFloatVelocity());
-    else if (message.isNoteOff()) stopNote (message.getNoteNumber());
+    if (message.isNoteOn())
+        startNote (message.getNoteNumber(), message.getFloatVelocity());
+    else if (message.isNoteOff())
+        stopNote (message.getNoteNumber());
     else if (message.isPitchWheel())
         applyPitchBend (message.getPitchWheelValue());
     else if (message.isController() && message.getControllerNumber() == 1)
@@ -509,9 +578,8 @@ void GeroSIDSynthAudioProcessor::handleMidiMessage (const juce::MidiMessage& mes
     else if (message.isAllNotesOff()
              || (message.isController() && message.getControllerNumber() == 123))
     {
-        // MIDI All Notes Off is an envelope release, not an emergency mute.
         monoHeldCounts.fill (0);
-        for (int voice = 0; voice < sidVoiceCount; ++voice)
+        for (int voice = 0; voice < maxPolyphony; ++voice)
             if (voiceNotes[static_cast<size_t> (voice)] >= 0)
                 stopNote (voiceNotes[static_cast<size_t> (voice)]);
     }
@@ -523,7 +591,7 @@ void GeroSIDSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 {
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
-    if (sid == nullptr)
+    if (sidEngines[0] == nullptr)
     {
         midiMessages.clear();
         return;
