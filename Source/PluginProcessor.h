@@ -53,6 +53,10 @@ private:
     std::array<unsigned long long, 128> monoHeldOrder {};
     unsigned long long nextMonoOrder = 1;
     std::array<int, maxPolyphony> releaseSamplesRemaining {};
+    // Short per-voice fade-in prevents a reset/retrigger transient without
+    // changing the SID's own programmable ADSR attack time.
+    std::array<int, maxPolyphony> voiceFadeInRemaining {};
+    std::array<int, maxPolyphony> voiceFadeInTotal {};
     std::array<unsigned long long, maxPolyphony> voiceStartOrder {};
     unsigned long long nextNoteOrder = 1;
     std::array<unsigned char, maxPolyphony> voiceControls {};
