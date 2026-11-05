@@ -220,7 +220,8 @@ double GeroSIDSynthAudioProcessor::getTunedFrequencyWord (int midiNote)
     const double semitones = static_cast<double> (midiNote + octaveShift * 12 + coarse)
                            + pitchBendSemitones + fineCents / 100.0;
     const double frequencyHz = 440.0 * std::pow (2.0, (semitones - 69.0) / 12.0);
-    return std::round (frequencyHz * 16777216.0 / sidClockHz);
+    return juce::jlimit (0.0, 65535.0,
+        std::round (frequencyHz * 16777216.0 / sidClockHz));
 }
 
 void GeroSIDSynthAudioProcessor::setVoiceFrequency (int voice, double frequencyWord)
@@ -358,6 +359,7 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
     voiceControls[static_cast<size_t> (voice)] &= static_cast<unsigned char> (~0x01);
     sid->write (base + 4, voiceControls[static_cast<size_t> (voice)]);
     voiceNotes[static_cast<size_t> (voice)] = -1;
+    glideSamplesRemaining[static_cast<size_t> (voice)] = 0;
 
     // SID release-rate periods in chip cycles for the 4-bit R nibble.
     // Reserve the voice until its envelope has had time to finish releasing.
@@ -389,6 +391,7 @@ void GeroSIDSynthAudioProcessor::silenceAllVoices()
         voiceControls[static_cast<size_t> (voice)] = 0x00;
         sid->write (base + 4, 0x00);
         voiceNotes[static_cast<size_t> (voice)] = -1;
+        glideSamplesRemaining[static_cast<size_t> (voice)] = 0;
         releaseSamplesRemaining[static_cast<size_t> (voice)] =
             static_cast<int> (std::ceil (currentSampleRate * voiceReuseGuardSeconds));
     }
