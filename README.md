@@ -1,16 +1,16 @@
 # Gero SID Synth
 
-A native Apple Silicon VST3 instrument for Cubase, built around a faithful MOS 6581 / MOS 8580 SID emulation.
+A native Apple Silicon VST3 instrument for Cubase, built around faithful MOS 6581 / MOS 8580 SID emulation.
 
 ## Project status
 
-**Stage 0 — repository initialized.** The first milestone is to integrate a legally compatible SID emulation core and establish a repeatable macOS arm64 VST3 build. Sound engine work comes before the custom Gero interface.
+**Stage 1 — VST3 build scaffold committed.** The repository now contains a JUCE/CMake plugin target and a GitHub Actions workflow that cross-compiles an arm64 VST3 on macOS. This first scaffold is intentionally silent: it validates the plugin/build pipeline and is not yet an audible SID instrument.
 
 ## Target
 
 - macOS on Apple Silicon (arm64), initially tested on an M-series Mac.
 - VST3 instrument for Cubase.
-- JUCE + CMake build.
+- JUCE 8 + CMake.
 - One SID chip instance with its three original independent voices.
 - PAL clock: 985,248 Hz (985.248 kHz).
 - Selectable 6581 and 8580 models.
@@ -31,35 +31,25 @@ The three voices belong to **one emulated SID chip**. They are not three unrelat
 
 ## Licensing
 
-The SID core must be selected only after its current license and redistribution requirements have been verified. The project will retain all required copyright notices, license texts and source-offer obligations. Do not assume that a GPL core can be distributed inside a differently licensed closed-source plugin.
+The SID core must be selected only after its current license and redistribution requirements have been verified. JUCE is dual-licensed; the applicable JUCE license and all SID-core obligations must be respected for the intended distribution. Do not assume a GPL core can be distributed inside a differently licensed closed-source plugin.
 
-## Build plan
+## Build
 
-1. Verify the upstream SID emulator, API, license and required source files.
-2. Add JUCE and a reproducible CMake VST3 target.
-3. Implement and test the SID core independently of the GUI.
-4. Add MIDI-to-SID voice allocation and note handling.
-5. Add parameter/state persistence and host automation.
-6. Build and validate the arm64 VST3 in Cubase.
-7. Design the Gero GUI after the sound engine is stable.
+The workflow is in `.github/workflows/build-macos.yml`. It runs on pushes to `main`, pull requests, and manual dispatch. It builds the arm64 VST3 and uploads a ZIP artifact when successful.
 
-## Repository layout (planned)
+## Repository layout
 
 ```
 GeroSIDSynth/
   CMakeLists.txt
   README.md
-  LICENSES/
   Source/
     PluginProcessor.h
     PluginProcessor.cpp
-    PluginEditor.h
-    PluginEditor.cpp
-    SidEngine/
-  Tests/
   .github/workflows/
+    build-macos.yml
 ```
 
-## Current note
+## Current limitation
 
-No binary plugin is available yet. This repository is the clean project starting point, not a release.
+The current plugin is a silent MIDI-instrument scaffold for validating the VST3 packaging pipeline. The SID emulator and sound generation are the next implementation milestone. No release-quality binary is available yet.
