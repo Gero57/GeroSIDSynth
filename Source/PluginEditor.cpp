@@ -272,7 +272,7 @@ void GeroSIDSynthAudioProcessorEditor::paint (juce::Graphics& g)
     g.fillRect (24, 24, 1052, 62);
     g.setColour (cream);
     g.setFont (juce::Font (juce::FontOptions (23.0f, juce::Font::bold)));
-    g.drawText ("PATCH CREATION", 38, 34, 330, 40, juce::Justification::centredLeft);
+    g.drawText ("GEROSIDSYNTH", 38, 34, 330, 40, juce::Justification::centredLeft);
     const juce::Colour stripes[] = {
         juce::Colour (0xffdf4d43), juce::Colour (0xffe58b43),
         juce::Colour (0xffe4cf4d), juce::Colour (0xff70a85b),
