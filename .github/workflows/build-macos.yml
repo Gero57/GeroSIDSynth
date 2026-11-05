@@ -1,0 +1,49 @@
+name: Build macOS VST3
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build arm64 VST3
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          xcodebuild -version
+          cmake --version
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+
+      - name: Build VST3
+        run: cmake --build build --config Release --target GeroSIDSynth_VST3 --parallel 3
+
+      - name: Package VST3
+        run: |
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            "build/GeroSIDSynth_artefacts/Release/VST3/Gero SID Synth.vst3" \
+            "dist/GeroSIDSynth-macOS-arm64-VST3.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeroSIDSynth-macOS-arm64-VST3
+          path: dist/GeroSIDSynth-macOS-arm64-VST3.zip
+          if-no-files-found: error
+          retention-days: 30
