@@ -39,6 +39,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout GeroSIDSynthAudioProcessor::
         juce::StringArray { "Off", "Low Pass", "Band Pass", "High Pass" }, 0));
     layout.add (std::make_unique<API> ("cutoff", "Filter Cutoff", 0, 2047, 1024));
     layout.add (std::make_unique<API> ("resonance", "Resonance", 0, 15, 4));
+    layout.add (std::make_unique<APC> ("voiceMode", "Voice Mode",
+        juce::StringArray { "POLY", "MONO" }, 0));
     layout.add (std::make_unique<APC> ("octave", "Octave",
         juce::StringArray { "-2", "-1", "0", "+1", "+2" }, 2));
     layout.add (std::make_unique<API> ("coarse", "Coarse", -12, 12, 0));
@@ -68,6 +70,9 @@ void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
 
     sidSamples.resize (static_cast<size_t> (std::max (samplesPerBlock, 1)));
     voiceNotes.fill (-1);
+    monoHeldCounts.fill (0);
+    monoHeldOrder.fill (0);
+    nextMonoOrder = 1;
     releaseSamplesRemaining.fill (0);
     voiceStartOrder.fill (0);
     nextNoteOrder = 1;
@@ -256,32 +261,41 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
     if (sid == nullptr || midiNote < 0 || midiNote > 127)
         return;
 
-    int voice = -1;
-    for (int offset = 0; offset < sidVoiceCount; ++offset)
+    const bool monoMode = parameterValue (parameters, "voiceMode") >= 0.5f;
+    int voice = monoMode ? 0 : -1;
+    if (! monoMode)
     {
-        const int candidate = (nextVoice + offset) % sidVoiceCount;
-        if (voiceNotes[static_cast<size_t> (candidate)] < 0
-            && releaseSamplesRemaining[static_cast<size_t> (candidate)] == 0)
+        for (int offset = 0; offset < sidVoiceCount; ++offset)
         {
-            voice = candidate;
-            break;
-        }
-    }
-    if (voice < 0)
-    {
-        int shortestRelease = std::numeric_limits<int>::max();
-        for (int candidate = 0; candidate < sidVoiceCount; ++candidate)
-        {
-            const int remaining = releaseSamplesRemaining[static_cast<size_t> (candidate)];
-            if (voiceNotes[static_cast<size_t> (candidate)] < 0 && remaining < shortestRelease)
+            const int candidate = (nextVoice + offset) % sidVoiceCount;
+            if (voiceNotes[static_cast<size_t> (candidate)] < 0
+                && releaseSamplesRemaining[static_cast<size_t> (candidate)] == 0)
             {
-                shortestRelease = remaining;
                 voice = candidate;
+                break;
             }
         }
+        if (voice < 0)
+        {
+            int shortestRelease = std::numeric_limits<int>::max();
+            for (int candidate = 0; candidate < sidVoiceCount; ++candidate)
+            {
+                const int remaining = releaseSamplesRemaining[static_cast<size_t> (candidate)];
+                if (voiceNotes[static_cast<size_t> (candidate)] < 0 && remaining < shortestRelease)
+                {
+                    shortestRelease = remaining;
+                    voice = candidate;
+                }
+            }
+        }
+        if (voice < 0)
+            voice = nextVoice;
     }
-    if (voice < 0)
-        voice = nextVoice;
+    else
+    {
+        monoHeldCounts[static_cast<size_t> (midiNote)]++;
+        monoHeldOrder[static_cast<size_t> (midiNote)] = nextMonoOrder++;
+    }
 
     releaseSamplesRemaining[static_cast<size_t> (voice)] = 0;
     const int base = voice * sidRegisterStride;
@@ -337,6 +351,51 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
 {
     if (sid == nullptr || midiNote < 0 || midiNote > 127)
         return;
+
+    if (parameterValue (parameters, "voiceMode") >= 0.5f)
+    {
+        auto& held = monoHeldCounts[static_cast<size_t> (midiNote)];
+        if (held > 0)
+            --held;
+
+        if (voiceNotes[0] != midiNote)
+            return;
+
+        int fallbackNote = -1;
+        unsigned long long newestOrder = 0;
+        for (int note = 0; note < 128; ++note)
+            if (monoHeldCounts[static_cast<size_t> (note)] > 0
+                && monoHeldOrder[static_cast<size_t> (note)] > newestOrder)
+            {
+                newestOrder = monoHeldOrder[static_cast<size_t> (note)];
+                fallbackNote = note;
+            }
+
+        if (fallbackNote >= 0)
+        {
+            const double target = getTunedFrequencyWord (fallbackNote);
+            const double glideMs = juce::jlimit (0.0, 2000.0,
+                static_cast<double> (parameterValue (parameters, "glide")));
+            const int glideSamples = static_cast<int> (std::round (currentSampleRate * glideMs / 1000.0));
+            const double previous = currentFrequencyWords[0];
+            if (glideSamples > 0 && previous > 0.0)
+            {
+                glideStartWords[0] = previous;
+                glideTargetWords[0] = target;
+                glideSamplesRemaining[0] = glideSamples;
+                glideSamplesTotal[0] = glideSamples;
+            }
+            else
+            {
+                setVoiceFrequency (0, target);
+                currentFrequencyWords[0] = target;
+                glideSamplesRemaining[0] = 0;
+            }
+            voiceNotes[0] = fallbackNote;
+            voiceStartOrder[0] = nextNoteOrder++;
+            return;
+        }
+    }
 
     // Preserve FIFO matching for repeated overlapping pitches.
     int voice = -1;
@@ -407,6 +466,7 @@ void GeroSIDSynthAudioProcessor::handleMidiMessage (const juce::MidiMessage& mes
              || (message.isController() && message.getControllerNumber() == 123))
     {
         // MIDI All Notes Off is an envelope release, not an emergency mute.
+        monoHeldCounts.fill (0);
         for (int voice = 0; voice < sidVoiceCount; ++voice)
             if (voiceNotes[static_cast<size_t> (voice)] >= 0)
                 stopNote (voiceNotes[static_cast<size_t> (voice)]);
