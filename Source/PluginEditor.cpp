@@ -163,14 +163,19 @@ GeroSIDSynthAudioProcessorEditor::GeroSIDSynthAudioProcessorEditor (GeroSIDSynth
     setupLabel (coarseLabel, "COARSE  /  SEMITONES");
     setupLabel (fineLabel, "FINE  /  CENTS");
     setupLabel (glideLabel, "GLIDE  /  ms");
+    setupLabel (vibratoDepthLabel, "VIBRATO  /  CENTS");
+    setupLabel (vibratoRateLabel, "VIBRATO  /  Hz");
 
     for (auto* slider : { &attack, &decay, &sustain, &release, &pulseWidth,
-                          &cutoff, &resonance, &coarse, &fine, &glide })
+                          &cutoff, &resonance, &coarse, &fine, &glide,
+                          &vibratoDepth, &vibratoRate })
         setupSlider (*slider);
 
     coarse.setRange (-12.0, 12.0, 1.0);
     fine.setRange (-100.0, 100.0, 0.1);
     glide.setRange (0.0, 2000.0, 1.0);
+    vibratoDepth.setRange (0.0, 100.0, 0.1);
+    vibratoRate.setRange (0.1, 12.0, 0.01);
     addAndMakeVisible (sync);
     addAndMakeVisible (ring);
 
@@ -190,6 +195,8 @@ GeroSIDSynthAudioProcessorEditor::GeroSIDSynthAudioProcessorEditor (GeroSIDSynth
     coarseAttach = std::make_unique<State::SliderAttachment> (state, "coarse", coarse);
     fineAttach = std::make_unique<State::SliderAttachment> (state, "fine", fine);
     glideAttach = std::make_unique<State::SliderAttachment> (state, "glide", glide);
+    vibratoDepthAttach = std::make_unique<State::SliderAttachment> (state, "vibratoDepth", vibratoDepth);
+    vibratoRateAttach = std::make_unique<State::SliderAttachment> (state, "vibratoRate", vibratoRate);
     syncAttach = std::make_unique<State::ButtonAttachment> (state, "sync", sync);
     ringAttach = std::make_unique<State::ButtonAttachment> (state, "ring", ring);
 }
@@ -267,7 +274,9 @@ void GeroSIDSynthAudioProcessorEditor::resized()
     octaveLabel.setBounds (58, 333, 110, 17); octave.setBounds (58, 355, 112, 31);
     coarse.setBounds (205, 310, 130, 91); coarseLabel.setBounds (198, 400, 145, 17);
     fine.setBounds (375, 310, 130, 91); fineLabel.setBounds (368, 400, 145, 17);
-    glide.setBounds (575, 310, 150, 91); glideLabel.setBounds (578, 400, 145, 17);
+    glide.setBounds (545, 310, 120, 91); glideLabel.setBounds (540, 400, 130, 17);
+    vibratoDepth.setBounds (700, 310, 112, 91); vibratoDepthLabel.setBounds (688, 400, 135, 17);
+    vibratoRate.setBounds (850, 310, 112, 91); vibratoRateLabel.setBounds (838, 400, 135, 17);
 
     envLabel.setBounds (55, 445, 220, 20);
     filterLabel.setBounds (555, 445, 250, 20);
