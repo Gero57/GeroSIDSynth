@@ -84,7 +84,7 @@ void GeroSIDSynthAudioProcessor::applyGlobalParameters()
     const int model = static_cast<int> (parameterValue (parameters, "model"));
     if (model != lastChipModel)
     {
-        sid->setChipModel (model == 0 ? reSIDfp::MOS6581 : reSIDfp::MOS8580);
+        sid->setChipModel (model == 0 ? reSIDfp::MOS6581 : reSIDfp::CSG8580);
         lastChipModel = model;
     }
 
