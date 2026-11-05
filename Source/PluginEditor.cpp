@@ -84,7 +84,7 @@ void SIDLookAndFeel::drawComboBox (juce::Graphics& g, int width, int height, boo
     arrow.lineTo (cx, cy + 2.5f);
     arrow.lineTo (cx + 4.0f, cy - 2.0f);
     g.setColour (amber);
-    g.strokePath (arrow, juce::PathStrokeType (1.7f, juce::PathStrokeType::rounded));
+    g.strokePath (arrow, juce::PathStrokeType (1.7f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 void SIDLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& button,
