@@ -1,6 +1,11 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <residfp/residfp.h>
+
+#include <array>
+#include <memory>
+#include <vector>
 
 class GeroSIDSynthAudioProcessor final : public juce::AudioProcessor
 {
@@ -31,7 +36,22 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
 private:
-    double currentSampleRate = 44100.0;
+    static constexpr double sidClockHz = 985248.0;
+    static constexpr int sidVoiceCount = 3;
+    static constexpr int sidRegisterStride = 7;
+
+    std::unique_ptr<reSIDfp::residfp> sid;
+    std::vector<short> sidSamples;
+    std::array<int, sidVoiceCount> voiceNotes { -1, -1, -1 };
+    std::array<int, 128> noteVoices {};
+    std::array<unsigned char, sidVoiceCount> voiceControls { 0x20, 0x20, 0x20 };
+    int nextVoice = 0;
+
+    void renderRange (juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
+    void handleMidiMessage (const juce::MidiMessage& message);
+    void startNote (int midiNote, float velocity);
+    void stopNote (int midiNote);
+    void silenceAllVoices();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GeroSIDSynthAudioProcessor)
 };
