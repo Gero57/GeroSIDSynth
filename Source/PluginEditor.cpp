@@ -132,14 +132,14 @@ void GeroSIDSynthAudioProcessorEditor::resized()
 
     modelLabel.setBounds (52, 139, 135, 18); model.setBounds (52, 162, 145, 32);
     waveLabel.setBounds (218, 139, 135, 18); waveform.setBounds (218, 162, 145, 32);
-    pulseLabel.setBounds (382, 139, 110, 18); pulseWidth.setBounds (382, 128, 108, 126);
+    pulseLabel.setBounds (382, 139, 110, 18); pulseWidth.setBounds (382, 153, 108, 98);
     sync.setBounds (525, 164, 95, 28); ring.setBounds (625, 164, 125, 28);
 
     pitchLabel.setBounds (52, 278, 230, 20);
     octaveLabel.setBounds (52, 309, 115, 18); octave.setBounds (52, 332, 115, 30);
-    coarse.setBounds (195, 292, 130, 100); coarseLabel.setBounds (195, 390, 130, 17);
-    fine.setBounds (365, 292, 130, 100); fineLabel.setBounds (365, 390, 130, 17);
-    glide.setBounds (555, 292, 150, 100); glideLabel.setBounds (555, 390, 150, 17);
+    coarse.setBounds (195, 292, 130, 94); coarseLabel.setBounds (195, 389, 130, 17);
+    fine.setBounds (365, 292, 130, 94); fineLabel.setBounds (365, 389, 130, 17);
+    glide.setBounds (555, 292, 150, 94); glideLabel.setBounds (555, 389, 150, 17);
 
     envLabel.setBounds (52, 432, 130, 20); filterLabel.setBounds (520, 432, 130, 20);
     juce::Component* envSliders[] = { &attack, &decay, &sustain, &release };
