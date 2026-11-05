@@ -126,8 +126,23 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
         sidSamples.resize (static_cast<size_t> (numSamples));
 
     sid->clock (sidSamples.data(), numSamples);
-    for (auto& remaining : releaseSamplesRemaining)
-        remaining = std::max (0, remaining - numSamples);
+
+    // A SID voice can occasionally keep its oscillator audible after the
+    // envelope should have reached zero. Enforce a per-voice release deadline:
+    // allow the natural ADSR tail, then disable that oscillator deterministically.
+    for (int voice = 0; voice < sidVoiceCount; ++voice)
+    {
+        auto& remaining = releaseSamplesRemaining[static_cast<size_t> (voice)];
+        if (remaining > 0)
+        {
+            remaining = std::max (0, remaining - numSamples);
+            if (remaining == 0 && voiceNotes[static_cast<size_t> (voice)] < 0)
+            {
+                voiceControls[static_cast<size_t> (voice)] = 0x00;
+                sid->write (voice * sidRegisterStride + 4, 0x00);
+            }
+        }
+    }
 
     for (int sample = 0; sample < numSamples; ++sample)
     {
