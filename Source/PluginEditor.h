@@ -29,14 +29,17 @@ private:
     GeroSIDSynthAudioProcessor& sidProcessor;
     SIDLookAndFeel sidLookAndFeel;
     juce::ComboBox model, waveform, filterMode, octave, voiceMode;
-    juce::Slider attack, decay, sustain, release, pulseWidth, cutoff, resonance, coarse, fine, glide;
+    juce::Slider attack, decay, sustain, release, pulseWidth, cutoff, resonance, coarse, fine, glide,
+        vibratoDepth, vibratoRate;
     juce::ToggleButton sync { "SYNC" }, ring { "RING MOD" };
     juce::Label title, subtitle, modelLabel, waveLabel, envLabel, filterLabel;
     juce::Label attackLabel, decayLabel, sustainLabel, releaseLabel, pulseLabel, cutoffLabel, resonanceLabel;
-    juce::Label pitchLabel, octaveLabel, coarseLabel, fineLabel, glideLabel, voiceModeLabel;
+    juce::Label pitchLabel, octaveLabel, coarseLabel, fineLabel, glideLabel, voiceModeLabel,
+        vibratoDepthLabel, vibratoRateLabel;
     std::unique_ptr<State::ComboBoxAttachment> modelAttach, waveAttach, filterAttach, octaveAttach, voiceModeAttach;
     std::unique_ptr<State::SliderAttachment> attackAttach, decayAttach, sustainAttach, releaseAttach,
-        pulseAttach, cutoffAttach, resonanceAttach, coarseAttach, fineAttach, glideAttach;
+        pulseAttach, cutoffAttach, resonanceAttach, coarseAttach, fineAttach, glideAttach,
+        vibratoDepthAttach, vibratoRateAttach;
     std::unique_ptr<State::ButtonAttachment> syncAttach, ringAttach;
     void setupSlider (juce::Slider&);
     void setupLabel (juce::Label&, const juce::String&);
