@@ -412,8 +412,11 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
 
     // When a slot is stolen, reset only that note's private SID instance.
     // This prevents a previous long envelope or gate state leaking into it.
-    if (voiceNotes[index] >= 0 || releaseSamplesRemaining[index] > 0)
+    if (! monoMode && (voiceNotes[index] >= 0 || releaseSamplesRemaining[index] > 0))
     {
+        // A stolen polyphonic slot gets a clean envelope state. Mono mode
+        // keeps its existing legato/glide behaviour and does not reset here.
+        voiceNotes[index] = -1;
         configureSid (engine);
         voiceControls[index] = 0x00;
         applyGlobalParameters();
