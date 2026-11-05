@@ -99,6 +99,8 @@ void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     monoHeldOrder.fill (0);
     nextMonoOrder = 1;
     releaseSamplesRemaining.fill (0);
+    voiceFadeInRemaining.fill (0);
+    voiceFadeInTotal.fill (0);
     voiceStartOrder.fill (0);
     nextNoteOrder = 1;
     voiceControls.fill (0x00);
@@ -298,7 +300,25 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
         {
             const auto index = static_cast<size_t> (voice);
             if (voiceNotes[index] >= 0 || releaseSamplesRemaining[index] > 0)
-                mixed += static_cast<float> (sidSamples[index][static_cast<size_t> (sample)]) / 32768.0f;
+            {
+                float voiceSample = static_cast<float> (sidSamples[index][static_cast<size_t> (sample)]) / 32768.0f;
+
+                // A SID voice can begin with a discontinuous oscillator/DC
+                // value even when its ADSR Attack is set to the slowest rate.
+                // Fade only the first few milliseconds of a newly allocated
+                // poly voice; the chip's ADSR remains fully in control after
+                // that and its attack time is not shortened or replaced.
+                if (voiceFadeInRemaining[index] > 0)
+                {
+                    const int total = std::max (1, voiceFadeInTotal[index]);
+                    const float progress = 1.0f - static_cast<float> (voiceFadeInRemaining[index])
+                                                   / static_cast<float> (total);
+                    voiceSample *= juce::jlimit (0.0f, 1.0f, progress);
+                    --voiceFadeInRemaining[index];
+                }
+
+                mixed += voiceSample;
+            }
         }
 
         // Fixed gain structure: never turn down the whole instrument merely
@@ -419,6 +439,8 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
     {
         voiceNotes[index] = -1;
         releaseSamplesRemaining[index] = 0;
+        voiceFadeInTotal[index] = std::max (1, static_cast<int> (std::round (currentSampleRate * 0.010)));
+        voiceFadeInRemaining[index] = voiceFadeInTotal[index];
         configureSid (engine);
         voiceControls[index] = 0x00;
         applyGlobalParameters();
@@ -566,6 +588,8 @@ void GeroSIDSynthAudioProcessor::silenceAllVoices()
         voiceNotes[index] = -1;
         glideSamplesRemaining[index] = 0;
         releaseSamplesRemaining[index] = 0;
+        voiceFadeInRemaining[index] = 0;
+        voiceFadeInTotal[index] = 0;
     }
     monoHeldCounts.fill (0);
 }
