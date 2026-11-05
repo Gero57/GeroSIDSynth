@@ -144,9 +144,16 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
         }
     }
 
+    // The SID triangle has a noticeably lower perceived output level than
+    // the other waveforms. Apply a modest make-up gain without hard clipping.
+    const int selectedWaveform = juce::jlimit (0, 3,
+        static_cast<int> (parameterValue (parameters, "waveform")));
+    const float waveformGain = selectedWaveform == 0 ? 1.25f : 1.0f;
+
     for (int sample = 0; sample < numSamples; ++sample)
     {
-        const float value = static_cast<float> (sidSamples[static_cast<size_t> (sample)]) / 32768.0f;
+        const float value = (static_cast<float> (sidSamples[static_cast<size_t> (sample)]) / 32768.0f)
+                          * waveformGain;
         for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
             buffer.setSample (channel, startSample + sample, value);
     }
@@ -257,8 +264,13 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
         static_cast<int> (parameterValue (parameters, "release")));
     const double releaseSeconds = static_cast<double> (releaseRateCycles[static_cast<size_t> (release)])
                                 * 256.0 / sidClockHz;
+    // The 6581's analogue-style envelope behaviour can leave a tiny
+    // residual at the end of long releases. Give it a little extra time to
+    // reach silence before the safety mute; the 8580 keeps the shorter guard.
+    const double safetyTailSeconds =
+        parameterValue (parameters, "model") < 0.5f ? 0.250 : 0.010;
     releaseSamplesRemaining[static_cast<size_t> (voice)] =
-        static_cast<int> (std::ceil (currentSampleRate * (releaseSeconds + 0.010)));
+        static_cast<int> (std::ceil (currentSampleRate * (releaseSeconds + safetyTailSeconds)));
 }
 
 void GeroSIDSynthAudioProcessor::silenceAllVoices()
