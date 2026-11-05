@@ -48,6 +48,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout GeroSIDSynthAudioProcessor::
         juce::NormalisableRange<float> (-100.0f, 100.0f, 0.1f), 0.0f, " cents"));
     layout.add (std::make_unique<APF> ("glide", "Glide",
         juce::NormalisableRange<float> (0.0f, 2000.0f, 1.0f, 0.5f), 0.0f, " ms"));
+    layout.add (std::make_unique<APF> ("vibratoDepth", "Vibrato Depth",
+        juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f, " cents"));
+    layout.add (std::make_unique<APF> ("vibratoRate", "Vibrato Rate",
+        juce::NormalisableRange<float> (0.1f, 12.0f, 0.01f), 5.0f, " Hz"));
     return layout;
 }
 
@@ -83,6 +87,7 @@ void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     glideSamplesRemaining.fill (0);
     glideSamplesTotal.fill (0);
     pitchBendSemitones = 0.0;
+    vibratoPhase = 0.0;
     nextVoice = 0;
     lastChipModel = -1;
     applyGlobalParameters();
@@ -120,7 +125,10 @@ void GeroSIDSynthAudioProcessor::applyGlobalParameters()
     if (filterMode == 3) modeBits = 0x40;
     sid->write (0x18, static_cast<unsigned char> (modeBits | 0x0f));
 
-    // Keep waveform and modulation switches responsive for notes already held.
+    // Hard sync on a real SID is a ring relationship: oscillator 1 is synced
+    // by oscillator 3. Keep oscillator 3 running as a fixed master and use
+    // oscillator 1 as the played slave. SYNC is therefore a monophonic mode.
+    const bool syncEnabled = parameterValue (parameters, "sync") >= 0.5f;
     const int waveform = juce::jlimit (0, 3, static_cast<int> (parameterValue (parameters, "waveform")));
     const unsigned char waveBits[] = { 0x10, 0x20, 0x40, 0x80 };
     for (int voice = 0; voice < sidVoiceCount; ++voice)
@@ -128,10 +136,22 @@ void GeroSIDSynthAudioProcessor::applyGlobalParameters()
         if (voiceNotes[static_cast<size_t> (voice)] < 0)
             continue;
         unsigned char control = static_cast<unsigned char> (waveBits[waveform] | 0x01);
-        if (parameterValue (parameters, "sync") >= 0.5f) control |= 0x02;
+        if (syncEnabled && voice == 0) control |= 0x02;
         if (parameterValue (parameters, "ring") >= 0.5f) control |= 0x04;
         voiceControls[static_cast<size_t> (voice)] = control;
         sid->write (voice * sidRegisterStride + 4, control);
+    }
+    if (syncEnabled)
+    {
+        const double masterWord = getTunedFrequencyWord (69);
+        setVoiceFrequency (2, masterWord);
+        voiceControls[2] = 0x20; // sawtooth, oscillator running, envelope gate low
+        sid->write (2 * sidRegisterStride + 4, voiceControls[2]);
+    }
+    else if (voiceNotes[2] < 0)
+    {
+        voiceControls[2] = 0x00;
+        sid->write (2 * sidRegisterStride + 4, 0x00);
     }
 }
 
@@ -144,35 +164,52 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
         sidSamples.resize (static_cast<size_t> (numSamples));
 
     bool hasActiveGlide = false;
-    for (auto remaining : glideSamplesRemaining)
-        hasActiveGlide = hasActiveGlide || remaining > 0;
-
-    if (hasActiveGlide)
+    bool hasActiveNotes = false;
+    for (int voice = 0; voice < sidVoiceCount; ++voice)
     {
-        // SID frequency registers are updated at sample rate only while a
-        // portamento is active, keeping the glide smooth without permanent CPU cost.
+        hasActiveGlide = hasActiveGlide || glideSamplesRemaining[static_cast<size_t> (voice)] > 0;
+        hasActiveNotes = hasActiveNotes || voiceNotes[static_cast<size_t> (voice)] >= 0;
+    }
+    const double vibratoDepth = juce::jlimit (0.0, 100.0,
+        static_cast<double> (parameterValue (parameters, "vibratoDepth")));
+    const double vibratoRate = juce::jlimit (0.1, 12.0,
+        static_cast<double> (parameterValue (parameters, "vibratoRate")));
+    const bool hasActiveVibrato = vibratoDepth > 0.001 && hasActiveNotes;
+
+    if (hasActiveGlide || hasActiveVibrato)
+    {
+        // Update SID pitch registers per sample only while glide or vibrato is
+        // active. The LFO modulates the tuned frequency, leaving PB independent.
+        const double phaseIncrement = juce::MathConstants<double>::twoPi
+                                    * vibratoRate / currentSampleRate;
         for (int sample = 0; sample < numSamples; ++sample)
         {
+            const double vibratoCents = hasActiveVibrato
+                ? std::sin (vibratoPhase) * vibratoDepth : 0.0;
+            const double vibratoRatio = std::pow (2.0, vibratoCents / 1200.0);
             for (int voice = 0; voice < sidVoiceCount; ++voice)
             {
                 auto& remaining = glideSamplesRemaining[static_cast<size_t> (voice)];
-                if (remaining <= 0)
-                    continue;
-
-                const int total = std::max (1, glideSamplesTotal[static_cast<size_t> (voice)]);
-                const double progress = 1.0 - static_cast<double> (remaining) / static_cast<double> (total);
-                const double start = glideStartWords[static_cast<size_t> (voice)];
-                const double target = glideTargetWords[static_cast<size_t> (voice)];
-                const double frequency = start + (target - start) * progress;
-                setVoiceFrequency (voice, frequency);
-                currentFrequencyWords[static_cast<size_t> (voice)] = frequency;
-
-                --remaining;
-                if (remaining == 0)
+                if (remaining > 0)
                 {
-                    setVoiceFrequency (voice, target);
-                    currentFrequencyWords[static_cast<size_t> (voice)] = target;
+                    const int total = std::max (1, glideSamplesTotal[static_cast<size_t> (voice)]);
+                    const double progress = 1.0 - static_cast<double> (remaining) / static_cast<double> (total);
+                    const double start = glideStartWords[static_cast<size_t> (voice)];
+                    const double target = glideTargetWords[static_cast<size_t> (voice)];
+                    const double frequency = start + (target - start) * progress;
+                    currentFrequencyWords[static_cast<size_t> (voice)] = frequency;
+                    --remaining;
+                    if (remaining == 0)
+                        currentFrequencyWords[static_cast<size_t> (voice)] = target;
                 }
+                if (voiceNotes[static_cast<size_t> (voice)] >= 0)
+                    setVoiceFrequency (voice, currentFrequencyWords[static_cast<size_t> (voice)] * vibratoRatio);
+            }
+            if (hasActiveVibrato)
+            {
+                vibratoPhase += phaseIncrement;
+                if (vibratoPhase >= juce::MathConstants<double>::twoPi)
+                    vibratoPhase -= juce::MathConstants<double>::twoPi;
             }
             sid->clock (&sidSamples[static_cast<size_t> (sample)], 1);
         }
@@ -261,7 +298,8 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
     if (sid == nullptr || midiNote < 0 || midiNote > 127)
         return;
 
-    const bool monoMode = parameterValue (parameters, "voiceMode") >= 0.5f;
+    const bool syncEnabled = parameterValue (parameters, "sync") >= 0.5f;
+    const bool monoMode = parameterValue (parameters, "voiceMode") >= 0.5f || syncEnabled;
     int voice = monoMode ? 0 : -1;
     if (! monoMode)
     {
@@ -337,7 +375,7 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
     const int waveform = juce::jlimit (0, 3, static_cast<int> (parameterValue (parameters, "waveform")));
     const unsigned char waveBits[] = { 0x10, 0x20, 0x40, 0x80 };
     unsigned char control = static_cast<unsigned char> (waveBits[waveform] | 0x01);
-    if (parameterValue (parameters, "sync") >= 0.5f) control |= 0x02;
+    if (parameterValue (parameters, "sync") >= 0.5f && voice == 0) control |= 0x02;
     if (parameterValue (parameters, "ring") >= 0.5f) control |= 0x04;
     voiceControls[static_cast<size_t> (voice)] = control;
     sid->write (base + 4, control);
@@ -352,7 +390,8 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
     if (sid == nullptr || midiNote < 0 || midiNote > 127)
         return;
 
-    if (parameterValue (parameters, "voiceMode") >= 0.5f)
+    if (parameterValue (parameters, "voiceMode") >= 0.5f
+        || parameterValue (parameters, "sync") >= 0.5f)
     {
         auto& held = monoHeldCounts[static_cast<size_t> (midiNote)];
         if (held > 0)
