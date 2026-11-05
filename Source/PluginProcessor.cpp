@@ -60,6 +60,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout GeroSIDSynthAudioProcessor::
         juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 50.0f, " cents"));
     layout.add (std::make_unique<APF> ("vibratoRate", "Vibrato Rate",
         juce::NormalisableRange<float> (0.1f, 12.0f, 0.01f), 5.0f, " Hz"));
+    layout.add (std::make_unique<APF> ("vibratoDelay", "Vibrato Delay",
+        juce::NormalisableRange<float> (0.0f, 5.0f, 0.01f), 0.5f, " s"));
     return layout;
 }
 
@@ -101,6 +103,7 @@ void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     releaseSamplesRemaining.fill (0);
     voiceFadeInRemaining.fill (0);
     voiceFadeInTotal.fill (0);
+    voiceAgeSamples.fill (0);
     voiceStartOrder.fill (0);
     nextNoteOrder = 1;
     voiceControls.fill (0x00);
@@ -217,7 +220,12 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
         static_cast<double> (parameterValue (parameters, "vibratoDepth")));
     const double vibratoRate = juce::jlimit (0.1, 12.0,
         static_cast<double> (parameterValue (parameters, "vibratoRate")));
+    const double vibratoDelaySeconds = juce::jlimit (0.0, 5.0,
+        static_cast<double> (parameterValue (parameters, "vibratoDelay")));
+    const int vibratoDelaySamples = static_cast<int> (std::round (vibratoDelaySeconds * currentSampleRate));
     const bool hasActiveVibrato = vibratoDepth > 0.001 && hasActiveNotes;
+    // Per-sample rendering counts each note's age, so automatic vibrato
+    // enters exactly when its delay expires, even mid-buffer.
     const bool updatePerSample = hasActiveGlide || hasActiveVibrato;
 
     if (updatePerSample)
@@ -226,10 +234,6 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
                                     * vibratoRate / currentSampleRate;
         for (int sample = 0; sample < numSamples; ++sample)
         {
-            const double vibratoCents = hasActiveVibrato
-                ? std::sin (vibratoPhase) * vibratoDepth * modWheelAmount : 0.0;
-            const double vibratoRatio = std::pow (2.0, vibratoCents / 1200.0);
-
             for (int voice = 0; voice < maxPolyphony; ++voice)
             {
                 const auto index = static_cast<size_t> (voice);
@@ -250,7 +254,18 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
                 }
 
                 if (voiceNotes[index] >= 0)
+                {
+                    const bool automaticVibrato = voiceAgeSamples[index] >= vibratoDelaySamples;
+                    // The mod wheel can bring vibrato in immediately and
+                    // continuously control its amount. Otherwise the delay
+                    // triggers the full programmed depth automatically.
+                    const double vibratoAmount = automaticVibrato ? 1.0 : modWheelAmount;
+                    const double vibratoCents = hasActiveVibrato
+                        ? std::sin (vibratoPhase) * vibratoDepth * vibratoAmount : 0.0;
+                    const double vibratoRatio = std::pow (2.0, vibratoCents / 1200.0);
                     setVoiceFrequency (voice, currentFrequencyWords[index] * vibratoRatio);
+                    ++voiceAgeSamples[index];
+                }
 
                 sidEngines[index]->clock (&sidSamples[index][static_cast<size_t> (sample)], 1);
             }
@@ -431,6 +446,7 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
 
     const auto index = static_cast<size_t> (voice);
     auto& engine = *sidEngines[index];
+    voiceAgeSamples[index] = 0;
 
     // Every new polyphonic note starts from a clean SID envelope state.
     // Reusing an engine whose previous ADSR just finished can otherwise
@@ -590,6 +606,7 @@ void GeroSIDSynthAudioProcessor::silenceAllVoices()
         releaseSamplesRemaining[index] = 0;
         voiceFadeInRemaining[index] = 0;
         voiceFadeInTotal[index] = 0;
+        voiceAgeSamples[index] = 0;
     }
     monoHeldCounts.fill (0);
 }
