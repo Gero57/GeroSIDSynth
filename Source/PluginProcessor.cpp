@@ -8,7 +8,6 @@ GeroSIDSynthAudioProcessor::GeroSIDSynthAudioProcessor()
     : juce::AudioProcessor (BusesProperties()
         .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
-    noteVoices.fill (-1);
 }
 
 void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -27,7 +26,6 @@ void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     sidSamples.resize (static_cast<size_t> (std::max (samplesPerBlock, 1)));
     voiceNotes.fill (-1);
     releaseSamplesRemaining.fill (0);
-    noteVoices.fill (-1);
     voiceControls.fill (0x20);
     nextVoice = 0;
 
@@ -77,7 +75,7 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
     if (sid == nullptr || midiNote < 0 || midiNote > 127)
         return;
 
-    int voice = noteVoices[static_cast<size_t> (midiNote)];
+    int voice = -1;
 
     // Prefer a genuinely idle voice. A voice in its short release guard period
     // is not considered free yet, even though its MIDI note has ended.
@@ -114,10 +112,6 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
     if (voice < 0)
         voice = nextVoice;
 
-    const int previousNote = voiceNotes[static_cast<size_t> (voice)];
-    if (previousNote >= 0)
-        noteVoices[static_cast<size_t> (previousNote)] = -1;
-
     releaseSamplesRemaining[static_cast<size_t> (voice)] = 0;
 
     const int base = voice * sidRegisterStride;
@@ -141,7 +135,7 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
     sid->write (base + 4, voiceControls[static_cast<size_t> (voice)]);
 
     voiceNotes[static_cast<size_t> (voice)] = midiNote;
-    noteVoices[static_cast<size_t> (midiNote)] = voice;
+    voiceStartOrder[static_cast<size_t> (voice)] = nextNoteOrder++;
     nextVoice = (voice + 1) % sidVoiceCount;
 }
 
@@ -150,7 +144,20 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
     if (sid == nullptr || midiNote < 0 || midiNote > 127)
         return;
 
-    const int voice = noteVoices[static_cast<size_t> (midiNote)];
+    // A single MIDI pitch may have multiple overlapping Note Ons.
+    // Find the oldest still-held instance (FIFO Note Off handling) instead
+    // of keeping one pitch->voice mapping that gets overwritten on retrigger.
+    int voice = -1;
+    auto oldestOrder = std::numeric_limits<unsigned long long>::max();
+    for (int candidate = 0; candidate < sidVoiceCount; ++candidate)
+    {
+        if (voiceNotes[static_cast<size_t> (candidate)] == midiNote
+            && voiceStartOrder[static_cast<size_t> (candidate)] < oldestOrder)
+        {
+            oldestOrder = voiceStartOrder[static_cast<size_t> (candidate)];
+            voice = candidate;
+        }
+    }
     if (voice < 0)
         return;
 
@@ -161,7 +168,6 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
     sid->write (base + 4, 0x00);
 
     voiceNotes[static_cast<size_t> (voice)] = -1;
-    noteVoices[static_cast<size_t> (midiNote)] = -1;
     releaseSamplesRemaining[static_cast<size_t> (voice)] =
         static_cast<int> (std::ceil (currentSampleRate * voiceReuseGuardSeconds));
 }
@@ -181,7 +187,6 @@ void GeroSIDSynthAudioProcessor::silenceAllVoices()
             static_cast<int> (std::ceil (currentSampleRate * voiceReuseGuardSeconds));
     }
 
-    noteVoices.fill (-1);
 }
 
 void GeroSIDSynthAudioProcessor::handleMidiMessage (const juce::MidiMessage& message)
