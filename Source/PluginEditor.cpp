@@ -135,7 +135,7 @@ GeroSIDSynthAudioProcessorEditor::GeroSIDSynthAudioProcessorEditor (GeroSIDSynth
     : juce::AudioProcessorEditor (&p), sidProcessor (p)
 {
     setLookAndFeel (&sidLookAndFeel);
-    setSize (1100, 740);
+    setSize (1100, 820);
 
     title.setText ("GEROSIDSYNTH", juce::dontSendNotification);
     title.setFont (juce::Font (juce::FontOptions (27.0f, juce::Font::bold)));
@@ -165,8 +165,11 @@ GeroSIDSynthAudioProcessorEditor::GeroSIDSynthAudioProcessorEditor (GeroSIDSynth
     octave.addItem ("-2 OCT", 1); octave.addItem ("-1 OCT", 2);
     octave.addItem ("0 OCT", 3); octave.addItem ("+1 OCT", 4); octave.addItem ("+2 OCT", 5);
     voiceMode.addItem ("POLYPHONIC", 1); voiceMode.addItem ("MONOPHONIC", 2);
+    vibratoShape.addItem ("SINE", 1); vibratoShape.addItem ("TRIANGLE", 2);
+    vibratoShape.addItem ("SQUARE", 3); vibratoShape.addItem ("SAW", 4);
+    vibratoShape.addItem ("RANDOM / S&H", 5);
 
-    for (auto* box : { &model, &waveform, &filterMode, &octave, &voiceMode })
+    for (auto* box : { &model, &waveform, &filterMode, &octave, &voiceMode, &vibratoShape })
     {
         box->setColour (juce::ComboBox::textColourId, cream);
         box->setColour (juce::ComboBox::outlineColourId, edge);
@@ -205,8 +208,8 @@ GeroSIDSynthAudioProcessorEditor::GeroSIDSynthAudioProcessorEditor (GeroSIDSynth
     coarse.setRange (-12.0, 12.0, 1.0);
     fine.setRange (-100.0, 100.0, 0.1);
     glide.setRange (0.0, 2000.0, 1.0);
-    vibratoDepth.setRange (0.0, 100.0, 0.1);
-    vibratoRate.setRange (0.1, 12.0, 0.01);
+    vibratoDepth.setRange (0.0, 1200.0, 0.1);
+    vibratoRate.setRange (0.1, 30.0, 0.01);
     vibratoDelay.setRange (0.0, 5.0, 0.01);
     addAndMakeVisible (sync);
     addAndMakeVisible (ring);
@@ -217,6 +220,7 @@ GeroSIDSynthAudioProcessorEditor::GeroSIDSynthAudioProcessorEditor (GeroSIDSynth
     filterAttach = std::make_unique<State::ComboBoxAttachment> (state, "filterMode", filterMode);
     octaveAttach = std::make_unique<State::ComboBoxAttachment> (state, "octave", octave);
     voiceModeAttach = std::make_unique<State::ComboBoxAttachment> (state, "voiceMode", voiceMode);
+    vibratoShapeAttach = std::make_unique<State::ComboBoxAttachment> (state, "vibratoShape", vibratoShape);
     attackAttach = std::make_unique<State::SliderAttachment> (state, "attack", attack);
     decayAttach = std::make_unique<State::SliderAttachment> (state, "decay", decay);
     sustainAttach = std::make_unique<State::SliderAttachment> (state, "sustain", sustain);
@@ -263,7 +267,7 @@ void GeroSIDSynthAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (bg);
     g.setColour (cabinet);
-    g.fillRoundedRectangle (12.0f, 12.0f, 1076.0f, 716.0f, 8.0f);
+    g.fillRoundedRectangle (12.0f, 12.0f, 1076.0f, 796.0f, 8.0f);
     g.setColour (edge);
     g.drawRoundedRectangle (12.0f, 12.0f, 1076.0f, 716.0f, 8.0f, 1.2f);
 
@@ -300,7 +304,7 @@ void GeroSIDSynthAudioProcessorEditor::paint (juce::Graphics& g)
     drawModule ({ 28.0f, 102.0f, 340.0f, 300.0f }, "SID OSCILLATOR");
     drawModule ({ 382.0f, 102.0f, 340.0f, 300.0f }, "ENVELOPE");
     drawModule ({ 736.0f, 102.0f, 336.0f, 300.0f }, "FILTER");
-    drawModule ({ 28.0f, 418.0f, 1044.0f, 290.0f }, "PITCH  /  MODULATION");
+    drawModule ({ 28.0f, 418.0f, 1044.0f, 370.0f }, "PITCH  /  CHIP MODULATION");
 
     g.setColour (juce::Colour (0xff6b7070));
     g.drawLine (48.0f, 150.0f, 348.0f, 150.0f, 1.0f);
@@ -348,5 +352,8 @@ void GeroSIDSynthAudioProcessorEditor::resized()
     vibratoDepthLabel.setBounds (650, 486, 130, 18); vibratoDepth.setBounds (658, 508, 112, 132);
     vibratoRateLabel.setBounds (790, 486, 110, 18); vibratoRate.setBounds (790, 508, 100, 132);
     vibratoDelayLabel.setBounds (930, 486, 125, 18); vibratoDelay.setBounds (938, 508, 112, 132);
+    setupLabel (vibratoShapeLabel, "LFO WAVEFORM");
+    vibratoShapeLabel.setBounds (52, 660, 160, 18);
+    vibratoShape.setBounds (52, 682, 190, 32);
     pitchLabel.setBounds (0, 0, 1, 1);
 }
