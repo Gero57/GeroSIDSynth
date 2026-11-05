@@ -224,15 +224,26 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
     if (voice < 0)
         return;
 
-    // Immediate voice mute, previously verified in the user's Cubase test.
-    // Clearing waveform as well as Gate prevents any residual SID oscillator
-    // or envelope tail from remaining audible after MIDI Note Off.
+    // Let the SID envelope enter its natural Release phase. Keep the selected
+    // waveform enabled and clear only Gate; hard-muting the control register
+    // also kills the envelope and produces an audible click (especially on 6581).
     const int base = voice * sidRegisterStride;
-    voiceControls[static_cast<size_t> (voice)] = 0x00;
-    sid->write (base + 4, 0x00);
+    voiceControls[static_cast<size_t> (voice)] &= static_cast<unsigned char> (~0x01);
+    sid->write (base + 4, voiceControls[static_cast<size_t> (voice)]);
     voiceNotes[static_cast<size_t> (voice)] = -1;
+
+    // SID release-rate periods in chip cycles for the 4-bit R nibble.
+    // Reserve the voice until its envelope has had time to finish releasing.
+    static constexpr std::array<int, 16> releaseRateCycles {
+        9, 32, 63, 95, 149, 220, 267, 313,
+        392, 977, 1954, 3126, 3907, 11720, 19532, 31251
+    };
+    const int release = juce::jlimit (0, 15,
+        static_cast<int> (parameterValue (parameters, "release")));
+    const double releaseSeconds = static_cast<double> (releaseRateCycles[static_cast<size_t> (release)])
+                                * 256.0 / sidClockHz;
     releaseSamplesRemaining[static_cast<size_t> (voice)] =
-        static_cast<int> (std::ceil (currentSampleRate * voiceReuseGuardSeconds));
+        static_cast<int> (std::ceil (currentSampleRate * (releaseSeconds + 0.010)));
 }
 
 void GeroSIDSynthAudioProcessor::silenceAllVoices()
@@ -255,8 +266,16 @@ void GeroSIDSynthAudioProcessor::handleMidiMessage (const juce::MidiMessage& mes
 {
     if (message.isNoteOn()) startNote (message.getNoteNumber(), message.getFloatVelocity());
     else if (message.isNoteOff()) stopNote (message.getNoteNumber());
-    else if (message.isAllNotesOff() || message.isAllSoundOff()) silenceAllVoices();
-    else if (message.isController() && message.getControllerNumber() == 123) silenceAllVoices();
+    else if (message.isAllNotesOff()
+             || (message.isController() && message.getControllerNumber() == 123))
+    {
+        // MIDI All Notes Off is an envelope release, not an emergency mute.
+        for (int voice = 0; voice < sidVoiceCount; ++voice)
+            if (voiceNotes[static_cast<size_t> (voice)] >= 0)
+                stopNote (voiceNotes[static_cast<size_t> (voice)]);
+    }
+    else if (message.isAllSoundOff())
+        silenceAllVoices();
 }
 
 void GeroSIDSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
