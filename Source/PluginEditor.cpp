@@ -190,10 +190,11 @@ GeroSIDSynthAudioProcessorEditor::GeroSIDSynthAudioProcessorEditor (GeroSIDSynth
     setupLabel (glideLabel, "GLIDE  /  ms");
     setupLabel (vibratoDepthLabel, "VIBRATO  /  CENTS");
     setupLabel (vibratoRateLabel, "VIBRATO  /  Hz");
+    setupLabel (vibratoDelayLabel, "VIBRATO DELAY  /  SEC");
 
     for (auto* slider : { &attack, &decay, &sustain, &release, &pulseWidth,
                           &cutoff, &resonance, &coarse, &fine, &glide,
-                          &vibratoDepth, &vibratoRate })
+                          &vibratoDepth, &vibratoRate, &vibratoDelay })
         setupSlider (*slider);
 
     for (auto* slider : { &attack, &decay, &sustain, &release, &pulseWidth })
@@ -206,6 +207,7 @@ GeroSIDSynthAudioProcessorEditor::GeroSIDSynthAudioProcessorEditor (GeroSIDSynth
     glide.setRange (0.0, 2000.0, 1.0);
     vibratoDepth.setRange (0.0, 100.0, 0.1);
     vibratoRate.setRange (0.1, 12.0, 0.01);
+    vibratoDelay.setRange (0.0, 5.0, 0.01);
     addAndMakeVisible (sync);
     addAndMakeVisible (ring);
 
@@ -227,6 +229,7 @@ GeroSIDSynthAudioProcessorEditor::GeroSIDSynthAudioProcessorEditor (GeroSIDSynth
     glideAttach = std::make_unique<State::SliderAttachment> (state, "glide", glide);
     vibratoDepthAttach = std::make_unique<State::SliderAttachment> (state, "vibratoDepth", vibratoDepth);
     vibratoRateAttach = std::make_unique<State::SliderAttachment> (state, "vibratoRate", vibratoRate);
+    vibratoDelayAttach = std::make_unique<State::SliderAttachment> (state, "vibratoDelay", vibratoDelay);
     syncAttach = std::make_unique<State::ButtonAttachment> (state, "sync", sync);
     ringAttach = std::make_unique<State::ButtonAttachment> (state, "ring", ring);
 }
@@ -343,6 +346,7 @@ void GeroSIDSynthAudioProcessorEditor::resized()
     fineLabel.setBounds (342, 486, 110, 18); fine.setBounds (338, 508, 112, 132);
     glideLabel.setBounds (482, 486, 110, 18); glide.setBounds (478, 508, 112, 132);
     vibratoDepthLabel.setBounds (650, 486, 130, 18); vibratoDepth.setBounds (658, 508, 112, 132);
-    vibratoRateLabel.setBounds (828, 486, 130, 18); vibratoRate.setBounds (836, 508, 112, 132);
+    vibratoRateLabel.setBounds (790, 486, 110, 18); vibratoRate.setBounds (790, 508, 100, 132);
+    vibratoDelayLabel.setBounds (930, 486, 125, 18); vibratoDelay.setBounds (938, 508, 112, 132);
     pitchLabel.setBounds (0, 0, 1, 1);
 }
