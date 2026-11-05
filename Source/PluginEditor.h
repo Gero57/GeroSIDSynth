@@ -10,7 +10,7 @@ public:
 
 private:
     using State = juce::AudioProcessorValueTreeState;
-    GeroSIDSynthAudioProcessor& processor;
+    GeroSIDSynthAudioProcessor& sidProcessor;
     juce::ComboBox model, waveform, filterMode;
     juce::Slider attack, decay, sustain, release, pulseWidth, cutoff, resonance;
     juce::ToggleButton sync { "SYNC" }, ring { "RING MOD" };
