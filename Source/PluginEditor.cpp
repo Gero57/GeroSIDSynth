@@ -63,7 +63,7 @@ void SIDLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int widt
     pointer.lineTo (cx + std::sin (angle) * pointerLength,
                     cy - std::cos (angle) * pointerLength);
     g.setColour (cream);
-    g.strokePath (pointer, juce::PathStrokeType (2.4f, juce::PathStrokeType::rounded));
+    g.strokePath (pointer, juce::PathStrokeType (2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.setColour (amber);
     g.fillEllipse (cx - 3.0f, cy - 3.0f, 6.0f, 6.0f);
 }
