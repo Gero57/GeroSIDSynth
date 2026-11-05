@@ -39,6 +39,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout GeroSIDSynthAudioProcessor::
         juce::StringArray { "Off", "Low Pass", "Band Pass", "High Pass" }, 0));
     layout.add (std::make_unique<API> ("cutoff", "Filter Cutoff", 0, 2047, 1024));
     layout.add (std::make_unique<API> ("resonance", "Resonance", 0, 15, 4));
+    layout.add (std::make_unique<APC> ("octave", "Octave",
+        juce::StringArray { "-2", "-1", "0", "+1", "+2" }, 2));
+    layout.add (std::make_unique<API> ("coarse", "Coarse", -12, 12, 0));
+    layout.add (std::make_unique<APF> ("fine", "Fine",
+        juce::NormalisableRange<float> (-100.0f, 100.0f, 0.1f), 0.0f, " cents"));
+    layout.add (std::make_unique<APF> ("glide", "Glide",
+        juce::NormalisableRange<float> (0.0f, 2000.0f, 1.0f, 0.5f), 0.0f, " ms"));
     return layout;
 }
 
@@ -65,6 +72,12 @@ void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     voiceStartOrder.fill (0);
     nextNoteOrder = 1;
     voiceControls.fill (0x20);
+    currentFrequencyWords.fill (0.0);
+    glideStartWords.fill (0.0);
+    glideTargetWords.fill (0.0);
+    glideSamplesRemaining.fill (0);
+    glideSamplesTotal.fill (0);
+    pitchBendSemitones = 0.0;
     nextVoice = 0;
     lastChipModel = -1;
     applyGlobalParameters();
@@ -125,7 +138,44 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
     if (sidSamples.size() < static_cast<size_t> (numSamples))
         sidSamples.resize (static_cast<size_t> (numSamples));
 
-    sid->clock (sidSamples.data(), numSamples);
+    bool hasActiveGlide = false;
+    for (auto remaining : glideSamplesRemaining)
+        hasActiveGlide = hasActiveGlide || remaining > 0;
+
+    if (hasActiveGlide)
+    {
+        // SID frequency registers are updated at sample rate only while a
+        // portamento is active, keeping the glide smooth without permanent CPU cost.
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            for (int voice = 0; voice < sidVoiceCount; ++voice)
+            {
+                auto& remaining = glideSamplesRemaining[static_cast<size_t> (voice)];
+                if (remaining <= 0)
+                    continue;
+
+                const int total = std::max (1, glideSamplesTotal[static_cast<size_t> (voice)]);
+                const double progress = 1.0 - static_cast<double> (remaining) / static_cast<double> (total);
+                const double start = glideStartWords[static_cast<size_t> (voice)];
+                const double target = glideTargetWords[static_cast<size_t> (voice)];
+                const double frequency = start + (target - start) * progress;
+                setVoiceFrequency (voice, frequency);
+                currentFrequencyWords[static_cast<size_t> (voice)] = frequency;
+
+                --remaining;
+                if (remaining == 0)
+                {
+                    setVoiceFrequency (voice, target);
+                    currentFrequencyWords[static_cast<size_t> (voice)] = target;
+                }
+            }
+            sid->clock (&sidSamples[static_cast<size_t> (sample)], 1);
+        }
+    }
+    else
+    {
+        sid->clock (sidSamples.data(), numSamples);
+    }
 
     // A SID voice can occasionally keep its oscillator audible after the
     // envelope should have reached zero. Enforce a per-voice release deadline:
@@ -156,6 +206,46 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
                           * waveformGain;
         for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
             buffer.setSample (channel, startSample + sample, value);
+    }
+}
+
+double GeroSIDSynthAudioProcessor::getTunedFrequencyWord (int midiNote)
+{
+    const int octaveIndex = juce::jlimit (0, 4,
+        static_cast<int> (parameterValue (parameters, "octave")));
+    const int octaveShift = octaveIndex - 2;
+    const int coarse = juce::jlimit (-12, 12,
+        static_cast<int> (parameterValue (parameters, "coarse")));
+    const double fineCents = static_cast<double> (parameterValue (parameters, "fine"));
+    const double semitones = static_cast<double> (midiNote + octaveShift * 12 + coarse)
+                           + pitchBendSemitones + fineCents / 100.0;
+    const double frequencyHz = 440.0 * std::pow (2.0, (semitones - 69.0) / 12.0);
+    return std::round (frequencyHz * 16777216.0 / sidClockHz);
+}
+
+void GeroSIDSynthAudioProcessor::setVoiceFrequency (int voice, double frequencyWord)
+{
+    if (sid == nullptr || voice < 0 || voice >= sidVoiceCount)
+        return;
+    const auto word = static_cast<unsigned int> (juce::jlimit (0.0, 65535.0, frequencyWord));
+    const int base = voice * sidRegisterStride;
+    sid->write (base + 0, static_cast<unsigned char> (word & 0xff));
+    sid->write (base + 1, static_cast<unsigned char> ((word >> 8) & 0xff));
+}
+
+void GeroSIDSynthAudioProcessor::applyPitchBend (int wheelValue)
+{
+    const double normalized = (static_cast<double> (juce::jlimit (0, 16383, wheelValue)) - 8192.0) / 8192.0;
+    pitchBendSemitones = normalized * 2.0;
+    for (int voice = 0; voice < sidVoiceCount; ++voice)
+    {
+        const int note = voiceNotes[static_cast<size_t> (voice)];
+        if (note < 0)
+            continue;
+        const double target = getTunedFrequencyWord (note);
+        setVoiceFrequency (voice, target);
+        currentFrequencyWords[static_cast<size_t> (voice)] = target;
+        glideSamplesRemaining[static_cast<size_t> (voice)] = 0;
     }
 }
 
@@ -194,16 +284,31 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
 
     releaseSamplesRemaining[static_cast<size_t> (voice)] = 0;
     const int base = voice * sidRegisterStride;
-    const double frequencyHz = juce::MidiMessage::getMidiNoteInHertz (midiNote);
-    const auto frequencyWord = static_cast<unsigned int> (
-        std::round (frequencyHz * 16777216.0 / sidClockHz));
+    const double frequencyWord = getTunedFrequencyWord (midiNote);
     const int pulseWidth = juce::jlimit (0, 4095,
         static_cast<int> (std::round (parameterValue (parameters, "pulseWidth") * 40.95f)));
 
     voiceControls[static_cast<size_t> (voice)] &= static_cast<unsigned char> (~0x01);
     sid->write (base + 4, voiceControls[static_cast<size_t> (voice)]);
-    sid->write (base + 0, static_cast<unsigned char> (frequencyWord & 0xff));
-    sid->write (base + 1, static_cast<unsigned char> ((frequencyWord >> 8) & 0xff));
+    const double glideMs = juce::jlimit (0.0, 2000.0,
+        static_cast<double> (parameterValue (parameters, "glide")));
+    const int glideSamples = static_cast<int> (std::round (currentSampleRate * glideMs / 1000.0));
+    const double previousFrequency = currentFrequencyWords[static_cast<size_t> (voice)];
+    if (glideSamples > 0 && previousFrequency > 0.0)
+    {
+        glideStartWords[static_cast<size_t> (voice)] = previousFrequency;
+        glideTargetWords[static_cast<size_t> (voice)] = frequencyWord;
+        glideSamplesRemaining[static_cast<size_t> (voice)] = glideSamples;
+        glideSamplesTotal[static_cast<size_t> (voice)] = glideSamples;
+        setVoiceFrequency (voice, previousFrequency);
+    }
+    else
+    {
+        setVoiceFrequency (voice, frequencyWord);
+        currentFrequencyWords[static_cast<size_t> (voice)] = frequencyWord;
+        glideSamplesRemaining[static_cast<size_t> (voice)] = 0;
+        glideSamplesTotal[static_cast<size_t> (voice)] = 0;
+    }
     sid->write (base + 2, static_cast<unsigned char> (pulseWidth & 0xff));
     sid->write (base + 3, static_cast<unsigned char> ((pulseWidth >> 8) & 0x0f));
 
@@ -293,6 +398,8 @@ void GeroSIDSynthAudioProcessor::handleMidiMessage (const juce::MidiMessage& mes
 {
     if (message.isNoteOn()) startNote (message.getNoteNumber(), message.getFloatVelocity());
     else if (message.isNoteOff()) stopNote (message.getNoteNumber());
+    else if (message.isPitchWheel())
+        applyPitchBend (message.getPitchWheelValue());
     else if (message.isAllNotesOff()
              || (message.isController() && message.getControllerNumber() == 123))
     {
