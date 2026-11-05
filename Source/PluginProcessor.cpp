@@ -155,8 +155,10 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
         return;
 
     const int base = voice * sidRegisterStride;
-    voiceControls[static_cast<size_t> (voice)] &= static_cast<unsigned char> (~0x01);
-    sid->write (base + 4, voiceControls[static_cast<size_t> (voice)]);
+    // Diagnostic hard mute: clear the waveform as well as Gate so a voice
+    // cannot leave a sustained oscillator audible after MIDI Note Off.
+    voiceControls[static_cast<size_t> (voice)] = 0x00;
+    sid->write (base + 4, 0x00);
 
     voiceNotes[static_cast<size_t> (voice)] = -1;
     noteVoices[static_cast<size_t> (midiNote)] = -1;
@@ -172,8 +174,8 @@ void GeroSIDSynthAudioProcessor::silenceAllVoices()
     for (int voice = 0; voice < sidVoiceCount; ++voice)
     {
         const int base = voice * sidRegisterStride;
-        voiceControls[static_cast<size_t> (voice)] &= static_cast<unsigned char> (~0x01);
-        sid->write (base + 4, voiceControls[static_cast<size_t> (voice)]);
+        voiceControls[static_cast<size_t> (voice)] = 0x00;
+        sid->write (base + 4, 0x00);
         voiceNotes[static_cast<size_t> (voice)] = -1;
         releaseSamplesRemaining[static_cast<size_t> (voice)] =
             static_cast<int> (std::ceil (currentSampleRate * voiceReuseGuardSeconds));
