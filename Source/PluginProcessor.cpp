@@ -15,6 +15,9 @@ void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     sid = std::make_unique<reSIDfp::residfp>();
     sid->setChipModel (reSIDfp::MOS6581);
     sid->setCombinedWaveforms (reSIDfp::AVERAGE);
+    // Disable the emulator's synthetic background-noise floor. The SID's
+    // actual per-voice Noise waveform remains available through its registers.
+    sid->noiseLevel (0);
     sid->setSamplingParameters (sidClockHz, reSIDfp::RESAMPLE, sampleRate);
     sid->reset();
 
@@ -98,7 +101,7 @@ void GeroSIDSynthAudioProcessor::startNote (int midiNote, float velocity)
     sid->write (base + 2, static_cast<unsigned char> (pulseWidth & 0xff));
     sid->write (base + 3, static_cast<unsigned char> ((pulseWidth >> 8) & 0x0f));
     sid->write (base + 5, 0x09); // Attack 0 / Decay 9
-    sid->write (base + 6, 0xa8); // Sustain 10 / Release 8
+    sid->write (base + 6, 0xa4); // Sustain 10 / Release 4 (shorter, cleaner tail)
 
     voiceControls[static_cast<size_t> (voice)] = 0x21; // Sawtooth + gate.
     sid->write (base + 4, voiceControls[static_cast<size_t> (voice)]);
