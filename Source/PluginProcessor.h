@@ -13,6 +13,9 @@ public:
     GeroSIDSynthAudioProcessor();
     ~GeroSIDSynthAudioProcessor() override = default;
 
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    juce::AudioProcessorValueTreeState parameters;
+
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -24,7 +27,7 @@ public:
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.025; }
+    double getTailLengthSeconds() const override { return 0.5; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -39,7 +42,7 @@ private:
     static constexpr double sidClockHz = 985248.0;
     static constexpr int sidVoiceCount = 3;
     static constexpr int sidRegisterStride = 7;
-    static constexpr double voiceReuseGuardSeconds = 0.020;
+    static constexpr double voiceReuseGuardSeconds = 0.150;
 
     std::unique_ptr<reSIDfp::residfp> sid;
     std::vector<short> sidSamples;
@@ -50,6 +53,9 @@ private:
     std::array<unsigned char, sidVoiceCount> voiceControls { 0x20, 0x20, 0x20 };
     double currentSampleRate = 44100.0;
     int nextVoice = 0;
+    int lastChipModel = -1;
+
+    void applyGlobalParameters();
 
     void renderRange (juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
     void handleMidiMessage (const juce::MidiMessage& message);
