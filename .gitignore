@@ -1,0 +1,17 @@
+# CMake / build
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# macOS / Xcode
+.DS_Store
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Generated plugin bundles and archives
+*.vst3/
+*.zip
