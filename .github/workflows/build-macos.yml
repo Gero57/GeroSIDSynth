@@ -40,10 +40,19 @@ jobs:
             "build/GeroSIDSynth_artefacts/Release/VST3/Gero SID Synth.vst3" \
             "dist/GeroSIDSynth-macOS-arm64-VST3.zip"
 
-      - name: Upload artifact
+      - name: Package corresponding source
+        run: |
+          test -d build/_deps/residfp-src
+          tar -czf dist/GeroSIDSynth-corresponding-source.tar.gz \
+            --exclude=.git --exclude=build --exclude=dist . \
+            build/_deps/residfp-src
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: GeroSIDSynth-macOS-arm64-VST3
-          path: dist/GeroSIDSynth-macOS-arm64-VST3.zip
+          name: GeroSIDSynth-macOS-arm64
+          path: |
+            dist/GeroSIDSynth-macOS-arm64-VST3.zip
+            dist/GeroSIDSynth-corresponding-source.tar.gz
           if-no-files-found: error
           retention-days: 30
