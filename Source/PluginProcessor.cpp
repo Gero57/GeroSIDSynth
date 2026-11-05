@@ -201,6 +201,7 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
     int soundingVoices = 0;
     bool hasActiveGlide = false;
     bool hasActiveNotes = false;
+    bool hasVibratoVoices = false;
     for (int voice = 0; voice < maxPolyphony; ++voice)
     {
         const auto index = static_cast<size_t> (voice);
@@ -209,6 +210,7 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
             ++soundingVoices;
         hasActiveGlide = hasActiveGlide || glideSamplesRemaining[index] > 0;
         hasActiveNotes = hasActiveNotes || voiceNotes[index] >= 0;
+        hasVibratoVoices = hasVibratoVoices || sounding;
         if (sounding && sidSamples[index].size() < static_cast<size_t> (numSamples))
             sidSamples[index].resize (static_cast<size_t> (numSamples));
     }
@@ -223,7 +225,9 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
     const double vibratoDelaySeconds = juce::jlimit (0.0, 5.0,
         static_cast<double> (parameterValue (parameters, "vibratoDelay")));
     const int vibratoDelaySamples = static_cast<int> (std::round (vibratoDelaySeconds * currentSampleRate));
-    const bool hasActiveVibrato = vibratoDepth > 0.001 && hasActiveNotes;
+    // Keep the LFO running for release tails too. Otherwise note-off can
+    // freeze the oscillator at the last vibrato pitch and sound pitch-bent.
+    const bool hasActiveVibrato = vibratoDepth > 0.001 && hasVibratoVoices;
     // Per-sample rendering counts each note's age, so automatic vibrato
     // enters exactly when its delay expires, even mid-buffer.
     const bool updatePerSample = hasActiveGlide || hasActiveVibrato;
@@ -253,12 +257,14 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
                         currentFrequencyWords[index] = glideTargetWords[index];
                 }
 
-                if (voiceNotes[index] >= 0)
+                if (voiceNotes[index] >= 0 || releaseSamplesRemaining[index] > 0)
                 {
                     const bool automaticVibrato = voiceAgeSamples[index] >= vibratoDelaySamples;
                     // The mod wheel can bring vibrato in immediately and
                     // continuously control its amount. Otherwise the delay
                     // triggers the full programmed depth automatically.
+                    // Continue the same modulation after note-off until the
+                    // complete SID release tail has finished.
                     const double vibratoAmount = automaticVibrato ? 1.0 : modWheelAmount;
                     const double vibratoCents = hasActiveVibrato
                         ? std::sin (vibratoPhase) * vibratoDepth * vibratoAmount : 0.0;
