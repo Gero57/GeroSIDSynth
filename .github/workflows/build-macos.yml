@@ -2,7 +2,7 @@ name: Build macOS VST3
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, feature/chip-modulation ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:

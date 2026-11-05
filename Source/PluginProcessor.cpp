@@ -57,9 +57,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout GeroSIDSynthAudioProcessor::
     layout.add (std::make_unique<APF> ("glide", "Glide",
         juce::NormalisableRange<float> (0.0f, 2000.0f, 1.0f, 0.5f), 0.0f, " ms"));
     layout.add (std::make_unique<APF> ("vibratoDepth", "Vibrato Depth",
-        juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 50.0f, " cents"));
+        juce::NormalisableRange<float> (0.0f, 1200.0f, 0.1f), 50.0f, " cents"));
+    layout.add (std::make_unique<APC> ("vibratoShape", "LFO Waveform",
+        juce::StringArray { "SINE", "TRIANGLE", "SQUARE", "SAW", "RANDOM" }, 0));
     layout.add (std::make_unique<APF> ("vibratoRate", "Vibrato Rate",
-        juce::NormalisableRange<float> (0.1f, 12.0f, 0.01f), 5.0f, " Hz"));
+        juce::NormalisableRange<float> (0.1f, 30.0f, 0.01f), 5.0f, " Hz"));
     layout.add (std::make_unique<APF> ("vibratoDelay", "Vibrato Delay",
         juce::NormalisableRange<float> (0.0f, 5.0f, 0.01f), 0.5f, " s"));
     return layout;
@@ -114,6 +116,7 @@ void GeroSIDSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     glideSamplesTotal.fill (0);
     pitchBendSemitones = 0.0;
     vibratoPhase = 0.0;
+    vibratoCycleCount = 0;
     modWheelAmount = 0.0;
     nextVoice = 0;
     lastChipModel = -1;
@@ -216,9 +219,9 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
     if (soundingVoices == 0)
         return;
 
-    const double vibratoDepth = juce::jlimit (0.0, 100.0,
+    const double vibratoDepth = juce::jlimit (0.0, 1200.0,
         static_cast<double> (parameterValue (parameters, "vibratoDepth")));
-    const double vibratoRate = juce::jlimit (0.1, 12.0,
+    const double vibratoRate = juce::jlimit (0.1, 30.0,
         static_cast<double> (parameterValue (parameters, "vibratoRate")));
     const double vibratoDelaySeconds = juce::jlimit (0.0, 5.0,
         static_cast<double> (parameterValue (parameters, "vibratoDelay")));
@@ -264,8 +267,27 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
                     // Continue the same modulation after note-off until the
                     // complete SID release tail has finished.
                     const double vibratoAmount = automaticVibrato ? 1.0 : modWheelAmount;
+                    double lfoValue = std::sin (vibratoPhase);
+                    const int shape = static_cast<int> (parameterValue (parameters, "vibratoShape"));
+                    switch (shape)
+                    {
+                        case 1: lfoValue = (2.0 / juce::MathConstants<double>::pi)
+                                         * std::asin (std::sin (vibratoPhase)); break;
+                        case 2: lfoValue = std::sin (vibratoPhase) >= 0.0 ? 1.0 : -1.0; break;
+                        case 3: lfoValue = vibratoPhase / juce::MathConstants<double>::pi - 1.0; break;
+                        case 4:
+                        {
+                            unsigned long long x = vibratoCycleCount + 0x9e3779b97f4a7c15ULL;
+                            x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+                            x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+                            x ^= (x >> 31);
+                            lfoValue = (static_cast<double> (x & 0xffffffULL) / 8388607.5) - 1.0;
+                            break;
+                        }
+                        default: break;
+                    }
                     const double vibratoCents = hasActiveVibrato
-                        ? std::sin (vibratoPhase) * vibratoDepth * vibratoAmount : 0.0;
+                        ? lfoValue * vibratoDepth * vibratoAmount : 0.0;
                     const double vibratoRatio = std::pow (2.0, vibratoCents / 1200.0);
                     setVoiceFrequency (voice, currentFrequencyWords[index] * vibratoRatio);
                     ++voiceAgeSamples[index];
@@ -278,7 +300,10 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
             {
                 vibratoPhase += phaseIncrement;
                 if (vibratoPhase >= juce::MathConstants<double>::twoPi)
+                {
                     vibratoPhase -= juce::MathConstants<double>::twoPi;
+                    ++vibratoCycleCount;
+                }
             }
         }
     }
