@@ -69,6 +69,7 @@ private:
     double currentSampleRate = 44100.0;
     double pitchBendSemitones = 0.0;
     double vibratoPhase = 0.0;
+    unsigned long long vibratoCycleCount = 0;
     double modWheelAmount = 0.0;
     int nextVoice = 0;
     int lastChipModel = -1;
