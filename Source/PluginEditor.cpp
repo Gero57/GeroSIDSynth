@@ -1,7 +1,7 @@
 #include "PluginEditor.h"
 
 GeroSIDSynthAudioProcessorEditor::GeroSIDSynthAudioProcessorEditor (GeroSIDSynthAudioProcessor& p)
-    : juce::AudioProcessorEditor (&p), processor (p)
+    : juce::AudioProcessorEditor (&p), sidProcessor (p)
 {
     setSize (820, 520);
     title.setText ("GERO  /  SID SYNTH", juce::dontSendNotification);
@@ -46,7 +46,7 @@ GeroSIDSynthAudioProcessorEditor::GeroSIDSynthAudioProcessorEditor (GeroSIDSynth
     ring.setColour (juce::ToggleButton::textColourId, juce::Colour (0xffe8f0ed));
     addAndMakeVisible (sync); addAndMakeVisible (ring);
 
-    auto& s = processor.parameters;
+    auto& s = sidProcessor.parameters;
     modelAttach = std::make_unique<State::ComboBoxAttachment> (s, "model", model);
     waveAttach = std::make_unique<State::ComboBoxAttachment> (s, "waveform", waveform);
     filterAttach = std::make_unique<State::ComboBoxAttachment> (s, "filterMode", filterMode);
