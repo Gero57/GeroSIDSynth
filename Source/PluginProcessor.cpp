@@ -200,7 +200,6 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
 
     int soundingVoices = 0;
     bool hasActiveGlide = false;
-    bool hasActiveNotes = false;
     bool hasVibratoVoices = false;
     for (int voice = 0; voice < maxPolyphony; ++voice)
     {
@@ -209,7 +208,6 @@ void GeroSIDSynthAudioProcessor::renderRange (juce::AudioBuffer<float>& buffer,
         if (sounding)
             ++soundingVoices;
         hasActiveGlide = hasActiveGlide || glideSamplesRemaining[index] > 0;
-        hasActiveNotes = hasActiveNotes || voiceNotes[index] >= 0;
         hasVibratoVoices = hasVibratoVoices || sounding;
         if (sounding && sidSamples[index].size() < static_cast<size_t> (numSamples))
             sidSamples[index].resize (static_cast<size_t> (numSamples));
