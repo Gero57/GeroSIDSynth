@@ -294,17 +294,14 @@ void GeroSIDSynthAudioProcessorEditor::paint (juce::Graphics& g)
         g.setColour (juce::Colour (0xff34383a));
         g.fillRoundedRectanglvoid GeroSIDSynthAudioProcessorEditor::resized()
 {
-    title.setBounds (38, 90, 1, 1);
-    subtitle.setBounds (38, 90, 1, 1);
-
-    // Oscillator section: shared SID voice controls currently exposed by the engine.
+    // Oscillator section: the current engine exposes one shared SID voice setup.
     modelLabel.setBounds (48, 158, 112, 18); model.setBounds (48, 180, 128, 32);
     waveLabel.setBounds (190, 158, 132, 18); waveform.setBounds (190, 180, 142, 32);
     pulseLabel.setBounds (48, 230, 100, 18); pulseWidth.setBounds (52, 250, 52, 132);
     sync.setBounds (126, 260, 88, 30); ring.setBounds (224, 260, 112, 30);
     voiceModeLabel.setBounds (126, 310, 190, 18); voiceMode.setBounds (126, 332, 190, 32);
 
-    // Four vertical envelope faders, echoing the ADSR strips in the reference UI.
+    // ADSR vertical faders.
     juce::Slider* envSliders[] = { &attack, &decay, &sustain, &release };
     juce::Label* envLabels[] = { &attackLabel, &decayLabel, &sustainLabel, &releaseLabel };
     const char* envNames[] = { "A", "D", "S", "R" };
@@ -320,16 +317,16 @@ void GeroSIDSynthAudioProcessorEditor::paint (juce::Graphics& g)
     filterMode.setBounds (770, 176, 258, 32);
     cutoffLabel.setBounds (770, 230, 110, 18); cutoff.setBounds (770, 246, 110, 132);
     resonanceLabel.setBounds (906, 230, 110, 18); resonance.setBounds (906, 246, 110, 132);
+    filterLabel.setBounds (0, 0, 1, 1);
 
-    // Pitch and modulation strip.
-    pitchLabel.setBounds (0, 0, 1, 1);
+    // Pitch and modulation controls.
     octaveLabel.setBounds (52, 486, 120, 18); octave.setBounds (52, 510, 120, 32);
     coarseLabel.setBounds (198, 486, 110, 18); coarse.setBounds (194, 508, 112, 132);
     fineLabel.setBounds (342, 486, 110, 18); fine.setBounds (338, 508, 112, 132);
     glideLabel.setBounds (482, 486, 110, 18); glide.setBounds (478, 508, 112, 132);
     vibratoDepthLabel.setBounds (650, 486, 130, 18); vibratoDepth.setBounds (658, 508, 112, 132);
     vibratoRateLabel.setBounds (828, 486, 130, 18); vibratoRate.setBounds (836, 508, 112, 132);
-    voiceModeLabel.setBounds (126, 310, 190, 18);
+    pitchLabel.setBounds (0, 0, 1, 1);
 }include "PluginEditor.h"
 
 namespace
