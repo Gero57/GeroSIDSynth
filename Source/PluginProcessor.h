@@ -45,7 +45,8 @@ private:
     std::vector<short> sidSamples;
     std::array<int, sidVoiceCount> voiceNotes { -1, -1, -1 };
     std::array<int, sidVoiceCount> releaseSamplesRemaining { 0, 0, 0 };
-    std::array<int, 128> noteVoices {};
+    std::array<unsigned long long, sidVoiceCount> voiceStartOrder { 0, 0, 0 };
+    unsigned long long nextNoteOrder = 1;
     std::array<unsigned char, sidVoiceCount> voiceControls { 0x20, 0x20, 0x20 };
     double currentSampleRate = 44100.0;
     int nextVoice = 0;
