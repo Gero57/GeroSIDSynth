@@ -51,7 +51,13 @@ private:
     std::array<unsigned long long, sidVoiceCount> voiceStartOrder { 0, 0, 0 };
     unsigned long long nextNoteOrder = 1;
     std::array<unsigned char, sidVoiceCount> voiceControls { 0x20, 0x20, 0x20 };
+    std::array<double, sidVoiceCount> currentFrequencyWords { 0.0, 0.0, 0.0 };
+    std::array<double, sidVoiceCount> glideStartWords { 0.0, 0.0, 0.0 };
+    std::array<double, sidVoiceCount> glideTargetWords { 0.0, 0.0, 0.0 };
+    std::array<int, sidVoiceCount> glideSamplesRemaining { 0, 0, 0 };
+    std::array<int, sidVoiceCount> glideSamplesTotal { 0, 0, 0 };
     double currentSampleRate = 44100.0;
+    double pitchBendSemitones = 0.0;
     int nextVoice = 0;
     int lastChipModel = -1;
 
@@ -61,6 +67,9 @@ private:
     void handleMidiMessage (const juce::MidiMessage& message);
     void startNote (int midiNote, float velocity);
     void stopNote (int midiNote);
+    void setVoiceFrequency (int voice, double frequencyWord);
+    double getTunedFrequencyWord (int midiNote) const;
+    void applyPitchBend (int wheelValue);
     void silenceAllVoices();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GeroSIDSynthAudioProcessor)
