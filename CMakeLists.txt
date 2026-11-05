@@ -31,6 +31,8 @@ juce_add_plugin(GeroSIDSynth
     COPY_PLUGIN_AFTER_BUILD FALSE
 )
 
+juce_generate_juce_header(GeroSIDSynth)
+
 target_sources(GeroSIDSynth PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
