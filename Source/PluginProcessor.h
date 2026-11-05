@@ -47,6 +47,9 @@ private:
     std::unique_ptr<reSIDfp::residfp> sid;
     std::vector<short> sidSamples;
     std::array<int, sidVoiceCount> voiceNotes { -1, -1, -1 };
+    std::array<int, 128> monoHeldCounts {};
+    std::array<unsigned long long, 128> monoHeldOrder {};
+    unsigned long long nextMonoOrder = 1;
     std::array<int, sidVoiceCount> releaseSamplesRemaining { 0, 0, 0 };
     std::array<unsigned long long, sidVoiceCount> voiceStartOrder { 0, 0, 0 };
     unsigned long long nextNoteOrder = 1;
