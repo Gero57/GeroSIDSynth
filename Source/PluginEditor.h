@@ -20,6 +20,7 @@ class GeroSIDSynthAudioProcessorEditor final : public juce::AudioProcessorEditor
 {
 public:
     explicit GeroSIDSynthAudioProcessorEditor (GeroSIDSynthAudioProcessor&);
+    ~GeroSIDSynthAudioProcessorEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
 
