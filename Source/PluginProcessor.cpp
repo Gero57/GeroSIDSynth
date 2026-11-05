@@ -210,6 +210,7 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
     if (sid == nullptr || midiNote < 0 || midiNote > 127)
         return;
 
+    // Preserve FIFO matching for repeated overlapping pitches.
     int voice = -1;
     auto oldestOrder = std::numeric_limits<unsigned long long>::max();
     for (int candidate = 0; candidate < sidVoiceCount; ++candidate)
@@ -219,13 +220,16 @@ void GeroSIDSynthAudioProcessor::stopNote (int midiNote)
             oldestOrder = voiceStartOrder[static_cast<size_t> (candidate)];
             voice = candidate;
         }
+
     if (voice < 0)
         return;
 
+    // Immediate voice mute, previously verified in the user's Cubase test.
+    // Clearing waveform as well as Gate prevents any residual SID oscillator
+    // or envelope tail from remaining audible after MIDI Note Off.
     const int base = voice * sidRegisterStride;
-    // Natural SID release: keep the waveform selected and clear only Gate.
-    voiceControls[static_cast<size_t> (voice)] &= static_cast<unsigned char> (~0x01);
-    sid->write (base + 4, voiceControls[static_cast<size_t> (voice)]);
+    voiceControls[static_cast<size_t> (voice)] = 0x00;
+    sid->write (base + 4, 0x00);
     voiceNotes[static_cast<size_t> (voice)] = -1;
     releaseSamplesRemaining[static_cast<size_t> (voice)] =
         static_cast<int> (std::ceil (currentSampleRate * voiceReuseGuardSeconds));
@@ -235,11 +239,12 @@ void GeroSIDSynthAudioProcessor::silenceAllVoices()
 {
     if (sid == nullptr)
         return;
+
     for (int voice = 0; voice < sidVoiceCount; ++voice)
     {
         const int base = voice * sidRegisterStride;
-        voiceControls[static_cast<size_t> (voice)] &= static_cast<unsigned char> (~0x01);
-        sid->write (base + 4, voiceControls[static_cast<size_t> (voice)]);
+        voiceControls[static_cast<size_t> (voice)] = 0x00;
+        sid->write (base + 4, 0x00);
         voiceNotes[static_cast<size_t> (voice)] = -1;
         releaseSamplesRemaining[static_cast<size_t> (voice)] =
             static_cast<int> (std::ceil (currentSampleRate * voiceReuseGuardSeconds));
